@@ -1,0 +1,23 @@
+[project]
+name = "comfy_env_core"
+version = "0.1.0"
+description = "Core logic for handling ComfyUI environments"
+readme = "README.md"
+authors = [
+    { name = "akatz-ai", email = "katzfeyalex+akatzgh@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "docker>=7.1.0",
+    "filelock>=3.17.0",
+    "pydantic>=2.10.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+]
