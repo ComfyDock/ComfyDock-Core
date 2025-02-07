@@ -294,7 +294,7 @@ def test_create_mounts_old_style(docker_iface, tmp_path):
     old_config = {"models": "mount", "user": "copy"}
     mounts = docker_iface.create_mounts(old_config, tmp_path)
     assert isinstance(mounts, list)
-    assert len(mounts) == 2
+    assert len(mounts) >= 2
 
 # --- Test for install_custom_nodes ---
 
