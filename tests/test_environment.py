@@ -205,7 +205,7 @@ def test_duplicate_environment(manager, fake_persistence):
         comfyui_path="/tmp",
         options={"port": 8000}
     )
-    with pytest.raises(Exception, match="Environment can only be duplicated after activation."):
+    with pytest.raises(Exception, match="Environment can only be duplicated after activation"):
         duplicate_env = manager.duplicate_environment(created_env.id, new_env)
     manager.activate_environment(created_env.id)
     duplicate_env = manager.duplicate_environment(created_env.id, new_env)
@@ -239,7 +239,7 @@ def test_delete_environment(manager, fake_persistence):
 
     # Hard-delete: calling delete_environment again should remove the environment.
     manager.delete_environment(env_id)
-    with pytest.raises(Exception, match="Environment not found."):
+    with pytest.raises(Exception, match=f"Environment {env_id} not found"):
         manager.get_environment(env_id)
 
 def test_prune_deleted_environments(manager, fake_persistence):
@@ -268,7 +268,7 @@ def test_prune_deleted_environments(manager, fake_persistence):
         time.sleep(0.01)
 
     # The first environment (oldest) should have been hard-deleted.
-    with pytest.raises(Exception, match="Environment not found."):
+    with pytest.raises(Exception, match=f"Environment {envs[0].id} not found"):
         manager.get_environment(envs[0].id)
 
     # The remaining environments should still be present and marked as deleted.

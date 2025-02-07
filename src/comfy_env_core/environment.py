@@ -2,6 +2,7 @@
 
 import time
 from pathlib import Path
+from typing import Optional, List
 from pydantic import BaseModel
 from docker.types import DeviceRequest
 from .docker_interface import DockerInterface, DockerInterfaceContainerNotFoundError
@@ -12,7 +13,7 @@ from .persistence import (
 )
 from .utils import generate_id
 
-# Constants for file paths and defaults.
+# Constants
 DB_FILE = "environments.json"
 DEFAULT_LOCK_FILE = f"{DB_FILE}.lock"
 DELETED_FOLDER_ID = "deleted"
@@ -31,78 +32,62 @@ class Environment(BaseModel):
     duplicate: bool = False
     options: dict = {}
     metadata: dict = {}
-    folderIds: list[str] = []
+    folderIds: List[str] = []
 
 
 class EnvironmentUpdate(BaseModel):
-    name: str = None
-    folderIds: list[str] = []
+    name: Optional[str] = None
+    folderIds: Optional[List[str]] = None
 
 
 class EnvironmentManager:
     def __init__(self, db_file: str = DB_FILE, lock_file: str = DEFAULT_LOCK_FILE):
         self.db_file = db_file
         self.lock_file = lock_file
-        # Create a docker interface
         self.docker_iface = DockerInterface()
 
-    def _save_environments(self, environments: list[Environment]) -> None:
-        """Persist the environments list to the JSON file."""
-        # Validate that environments is a list of Environment objects.
+    def _validate_environments_list(self, environments: List[Environment]) -> None:
         if not all(isinstance(env, Environment) for env in environments):
-            raise Exception("All environments must be Environment objects.")
-        try:
-            # Convert environments to dicts if they are Environment objects
-            envs_list = [env.model_dump() for env in environments]
+            raise ValueError("All environments must be Environment instances.")
 
+    def _save_environments(self, environments: List[Environment]) -> None:
+        self._validate_environments_list(environments)
+        try:
+            envs_list = [env.model_dump() for env in environments]
             persistence_save_environments(envs_list, self.db_file, self.lock_file)
         except PersistenceError as e:
-            raise Exception(f"Error saving environments: {str(e)}")
-        
-    def _update_environment(self, env: Environment, environments: list[Environment]) -> None:
-        """Update an environment in the list."""
-        # Validate that environments is a list of Environment objects.
-        if not all(isinstance(env, Environment) for env in environments):
-            raise Exception("All environments must be Environment objects.")
-        for i, e in enumerate(environments):
-            if e.id == env.id:
-                environments[i] = env
+            raise RuntimeError(f"Error saving environments: {e}")
 
-                break
-        self._save_environments(environments)
+    def _update_environment(self, new_env: Environment, environments: List[Environment]) -> None:
+        self._validate_environments_list(environments)
+        for i, env in enumerate(environments):
+            if env.id == new_env.id:
+                environments[i] = new_env
+                return
+        raise ValueError("Environment not found in list")
 
-    def _remove_environment(self, env: Environment, environments: list[Environment]) -> None:
-        """Remove an environment from the list."""
-        # Validate that environments is a list of Environment objects.
-        if not all(isinstance(env, Environment) for env in environments):
-            raise Exception("All environments must be Environment objects.")
+    def _remove_environment(self, env: Environment, environments: List[Environment]) -> None:
+        self._validate_environments_list(environments)
         environments[:] = [e for e in environments if e.id != env.id]
-        self._save_environments(environments)
 
+    def _find_environment(self, env_id: str, environments: List[Environment]) -> Environment:
+        for env in environments:
+            if env.id == env_id:
+                return env
+        raise ValueError(f"Environment {env_id} not found")
 
     def get_environment(self, env_id: str) -> Environment:
-        """
-        Get an environment by its ID.
-        """
         environments = self.load_environments()
-        env = next((e for e in environments if e.id == env_id), None)
-        if not env:
-            raise Exception("Environment not found.")
-        return env
+        return self._find_environment(env_id, environments)
 
-    def load_environments(self, folder_id: str = None) -> list[Environment]:
-        """
-        Load environments from the JSON database, update each container's status,
-        and optionally filter by folder_id.
-        """
+    def load_environments(self, folder_id: Optional[str] = None) -> List[Environment]:
         try:
-            environments = persistence_load_environments(self.db_file, self.lock_file)
+            raw_envs = persistence_load_environments(self.db_file, self.lock_file)
         except PersistenceError as e:
-            raise Exception(f"Error loading environments: {str(e)}")
-        
-        environments = [Environment(**env) for env in environments]
+            raise RuntimeError(f"Error loading environments: {e}")
 
-        # Update container statuses.
+        environments = [Environment(**env) for env in raw_envs]
+
         for env in environments:
             try:
                 container = self.docker_iface.get_container(env.id)
@@ -110,319 +95,196 @@ class EnvironmentManager:
             except DockerInterfaceContainerNotFoundError:
                 env.status = "dead"
             except Exception as e:
-                raise Exception(f"Error updating container status: {str(e)}")
+                raise RuntimeError(f"Error updating container status: {e}")
 
-
-        # Save updated statuses.
         self._save_environments(environments)
 
-        # Optionally filter by folder_id.
         if folder_id:
-            if folder_id == "all":
-                environments = [
-                    env
-                    for env in environments
-                    if DELETED_FOLDER_ID not in env.folderIds
-                ]
-            else:
-                environments = [
-                    env for env in environments if folder_id in env.folderIds
-                ]
+            filter_fn = (
+                lambda e: DELETED_FOLDER_ID not in e.folderIds
+                if folder_id == "all"
+                else folder_id in e.folderIds
+            )
+            return [env for env in environments if filter_fn(env)]
         return environments
 
-
-    def check_environment_name(self, env: Environment, environments: list[Environment]):
-        """
-        Validate the environment's name. For example, ensure that the name isn't too long.
-        (You can also check for uniqueness here if desired.)
-        """
+    def check_environment_name(self, env: Environment, environments: List[Environment]) -> None:
         if len(env.name) > 128:
-            raise Exception(
-                "Environment name is too long. Maximum length is 128 characters."
-            )
-        # Uncomment if you want to enforce uniqueness:
-        # if any(e["name"] == env.name for e in environments):
-        #     raise Exception("Environment name already exists.")
+            raise ValueError("Environment name exceeds 128 characters")
+
+    def _generate_container_name(self) -> str:
+        return f"comfy-env-{generate_id()}"
+
+    def _build_command(self, port: int, base_command: str) -> str:
+        return f"--port {port} {base_command}".strip()
+
+    def _get_device_requests(self, runtime: str) -> Optional[List[DeviceRequest]]:
+        return [DeviceRequest(count=-1, capabilities=[["gpu"]])] if runtime == "nvidia" else None
+
+    def _create_container_config(self, env: Environment) -> tuple:
+        comfyui_path = Path(env.comfyui_path)
+        mount_config = env.options.get("mount_config", {})
+        mounts = self.docker_iface.create_mounts(mount_config, comfyui_path)
+        
+        port = env.options.get("port", COMFYUI_PORT)
+        command = self._build_command(port, env.command)
+        
+        runtime = env.options.get("runtime", "")
+        device_requests = self._get_device_requests(runtime)
+        
+        return mounts, port, command, device_requests
 
     def create_environment(self, env: Environment) -> Environment:
-        """
-        Create a new environment record by adding it to the database.
-        """
         environments = self.load_environments()
         self.check_environment_name(env, environments)
 
-        # Convert comfyui_path to a Path object
-        comfyui_path = Path(env.comfyui_path)
-
-        # Ensure the image is available locally (or pull it)
         self.docker_iface.try_pull_image(env.image)
-
-        # Create mounts from the provided mount_config (if any)
-        mount_config = env.options.get("mount_config", {})
-        mounts = self.docker_iface.create_mounts(mount_config, comfyui_path)
-        # Determine port and update command accordingly
-        port = env.options.get("port", COMFYUI_PORT)
-        combined_cmd = f" --port {port} {env.command}"
-
-        # Determine runtime and device requests
-        runtime = "nvidia" if env.options.get("runtime", "") == "nvidia" else None
-        device_requests = (
-            [DeviceRequest(count=-1, capabilities=[["gpu"]])] if runtime else None
-        )
-
-        # Generate a unique container name (assumes you have a generate_id helper)
-        container_name = f"comfy-env-{generate_id()}"
-        env.container_name = container_name
-
-        # Create the container via the docker interface
+        mounts, port, command, device_requests = self._create_container_config(env)
+        
+        env.container_name = self._generate_container_name()
         container = self.docker_iface.create_container(
             image=env.image,
-            name=container_name,
-            command=combined_cmd,
-            # runtime=runtime,
+            name=env.container_name,
+            command=command,
             device_requests=device_requests,
             ports={str(port): port},
             mounts=mounts,
         )
 
-        # Set metadata and update environment record
-        env.metadata = {"base_image": env.image, "created_at": time.time()}
         env.id = container.id
         env.status = "created"
-
+        env.metadata = {"base_image": env.image, "created_at": time.time()}
+        
         environments.append(env)
         self._save_environments(environments)
         return env
 
     def duplicate_environment(self, env_id: str, new_env: Environment) -> Environment:
-        """
-        Duplicate an existing environment by committing the original container's state
-        to a new image and then creating a new container.
-        """
         environments = self.load_environments()
+        original = self._find_environment(env_id, environments)
 
-        original = next((e for e in environments if e.id == env_id), None)
-        if not original:
-            raise Exception("Original environment not found.")
         if original.status == "created":
-            raise Exception("Environment can only be duplicated after activation.")
+            raise RuntimeError("Environment can only be duplicated after activation")
 
-        # Use the original comfyui_path to resolve mounts
-        comfyui_path = Path(original.comfyui_path)
+        mounts, port, command, device_requests = self._create_container_config(new_env)
+        new_env.container_name = self._generate_container_name()
 
-        mount_config = new_env.options.get("mount_config", {})
-        mounts = self.docker_iface.create_mounts(mount_config, comfyui_path)
-
-        port = new_env.options.get("port", COMFYUI_PORT)
-        combined_cmd = f" --port {port} {new_env.command}"
-
-        runtime = "nvidia" if new_env.options.get("runtime", "") == "nvidia" else None
-        device_requests = (
-            [DeviceRequest(count=-1, capabilities=[["gpu"]])] if runtime else None
-        )
-
-        container_name = f"comfy-env-{generate_id()}"
-        new_env.container_name = container_name
-
-        # Retrieve the original container and commit it to create a new image.
         original_container = self.docker_iface.get_container(env_id)
-        image_repo = "comfy-env-clone"
-        unique_image = f"{image_repo}:{container_name}"
+        unique_image = f"comfy-env-clone:{new_env.container_name}"
+        self.docker_iface.commit_container(original_container, "comfy-env-clone", new_env.container_name)
 
-        try:
-            self.docker_iface.commit_container(
-                original_container, image_repo, container_name
-            )
-        except Exception as e:
-            raise Exception(f"Error committing container: {str(e)}")
-
-        # Create a new container from the committed image
-        new_container = self.docker_iface.create_container(
+        self.docker_iface.create_container(
             image=unique_image,
-            name=container_name,
-            command=combined_cmd,
-            # runtime=runtime,
+            name=new_env.container_name,
+            command=command,
             device_requests=device_requests,
             ports={str(port): port},
             mounts=mounts,
         )
 
-        # Inherit and update metadata as needed
-        new_env.metadata = original.metadata
-        new_env.metadata["created_at"] = time.time()
-        new_env.id = new_container.id
+        new_env.id = new_env.container_name  # Assuming container.id is set correctly in create_container
         new_env.image = unique_image
         new_env.status = "created"
         new_env.duplicate = True
+        new_env.metadata = {**original.metadata, "created_at": time.time()}
 
         environments.append(new_env)
         self._save_environments(environments)
         return new_env
 
     def update_environment(self, env_id: str, update: EnvironmentUpdate) -> Environment:
-        """
-        Update an existing environment record.
-        """
         environments = self.load_environments()
-        env = self.get_environment(env_id)
+        env = self._find_environment(env_id, environments)
 
         if update.name is not None:
             env.name = update.name
-            if env.container_name is None:
+            if not env.container_name:
                 env.container_name = env.name
+                
         if update.folderIds is not None:
             env.folderIds = update.folderIds
 
-        updated_env = env
-
+        self._update_environment(env, environments)
         self._save_environments(environments)
-        return updated_env
+        return env
 
-    def activate_environment(
-        self, env_id: str, allow_multiple: bool = False, options: dict = None
-    ) -> Environment:
-        """
-        Activate an environment:
-          - Stop other running containers (if allow_multiple is False).
-          - Start this container if it is not already running.
-          - (If the environment is in the "created" state, additional copy/setup steps
-            can be performed externally.)
-        """
+    def _stop_other_environments(self, current_env_id: str, environments: List[Environment]) -> None:
+        for env in environments:
+            if env.id != current_env_id and env.status == "running":
+                try:
+                    container = self.docker_iface.get_container(env.id)
+                    self.docker_iface.stop_container(container)
+                except DockerInterfaceContainerNotFoundError:
+                    continue
+
+    def activate_environment(self, env_id: str, allow_multiple: bool = False) -> Environment:
         environments = self.load_environments()
-        env = self.get_environment(env_id)
-
+        env = self._find_environment(env_id, environments)
         container = self.docker_iface.get_container(env.id)
 
-        # Stop all other running containers if multiple activations aren't allowed.
         if not allow_multiple:
-            for other in environments:
-                if other.id != env_id and other.status == "running":
-                    try:
-                        other_container = self.docker_iface.get_container(other.id)
+            self._stop_other_environments(env_id, environments)
 
-                        self.docker_iface.stop_container(other_container)
-                    except Exception:
-                        pass
-
-        # Start the container if it isn't running.
         self.docker_iface.start_container(container)
 
-        # Get the container's comfyui path
-        comfyui_path = Path(env.comfyui_path)
-
-        # Get the container's mount config
-        mount_config = env.options.get("mount_config", {})
-
-        # (Optional: if in the "created" state, trigger copying of files into the container.)
         if env.status == "created":
-            installed_nodes = self.docker_iface.copy_directories_to_container(
-                env_id, comfyui_path, mount_config
-            )
-
-            if installed_nodes:
-                self.docker_iface.restart_container(container)
+            comfyui_path = Path(env.comfyui_path)
+            mount_config = env.options.get("mount_config", {})
+            self.docker_iface.copy_directories_to_container(env.id, comfyui_path, mount_config)
+            self.docker_iface.restart_container(container)
 
         env.status = "running"
+        self._update_environment(env, environments)
         self._save_environments(environments)
         return env
 
     def deactivate_environment(self, env_id: str) -> Environment:
-        """
-        Deactivate an environment by stopping its container.
-        """
         environments = self.load_environments()
-        env = self.get_environment(env_id)
-
-        # Get the container
+        env = self._find_environment(env_id, environments)
         container = self.docker_iface.get_container(env.id)
 
-        # If the container is already stopped, return the environment
-        if container.status in ["stopped", "exited", "created", "dead"]:
-            return env
-
-        self.docker_iface.stop_container(container)
-        env.status = "stopped"
-        self._save_environments(environments)
+        if container.status not in ("stopped", "exited", "created", "dead"):
+            self.docker_iface.stop_container(container)
+            env.status = "stopped"
+            self._update_environment(env, environments)
+            self._save_environments(environments)
         return env
 
-    def _hard_delete_environment(
-        self, env: Environment, environments: list[Environment], timeout: int = SIGNAL_TIMEOUT
-    ) -> None:
-        """
-        Permanently delete the environment: stop and remove its container, and if it's a duplicate,
-        remove its backing image.
-        """
+    def _hard_delete_environment(self, env: Environment, environments: List[Environment]) -> None:
         try:
             container = self.docker_iface.get_container(env.id)
-            self.docker_iface.stop_container(container, timeout=timeout)
+            self.docker_iface.stop_container(container, timeout=SIGNAL_TIMEOUT)
             self.docker_iface.remove_container(container)
         except DockerInterfaceContainerNotFoundError:
-            print(f"Container {env.id} not found")
             pass
-        except Exception as e:
-            print(f"Error removing container {env.id}: {str(e)}")
 
         if env.duplicate:
             try:
                 self.docker_iface.remove_image(env.image, force=True)
-            except Exception as e:
-                print(f"Error removing backing image {env.image}: {str(e)}")
+            except Exception:
+                pass
 
         self._remove_environment(env, environments)
 
-    def _prune_deleted_environments(self, environments: list[Environment], max_deleted: int) -> None:
-        """
-        Remove the oldest soft-deleted environments if the total number exceeds the maximum allowed.
-        """
-        deleted_envs = [
-            env for env in environments if DELETED_FOLDER_ID in env.folderIds
-        ]
-        print(f"Deleted environments: {len(deleted_envs)}")
+    def _prune_deleted_environments(self, environments: List[Environment], max_deleted: int) -> None:
+        deleted_envs = [env for env in environments if DELETED_FOLDER_ID in env.folderIds]
         if len(deleted_envs) <= max_deleted:
             return
 
-        # Sort deleted environments by deletion timestamp (oldest first).
         deleted_envs.sort(key=lambda e: e.metadata.get("deleted_at", 0))
-        to_remove = len(deleted_envs) - max_deleted
-        print(f"To remove: {to_remove}")
-
-        for i in range(to_remove):
-            print(f"Removing environment: {deleted_envs[i]}")
-            try:
-                self._hard_delete_environment(deleted_envs[i], environments)
-            except Exception as e:
-                print(f"Error removing environment {deleted_envs[i]}: {str(e)}")
-            print(f"Environments after hard delete: {environments}")
-
+        for env in deleted_envs[: len(deleted_envs) - max_deleted]:
+            self._hard_delete_environment(env, environments)
 
     def delete_environment(self, env_id: str, max_deleted: int = 10) -> str:
-        """
-        Soft delete or hard delete an environment.
-          - If the environment isn't marked as deleted, soft-delete it (by setting its folder to 'deleted').
-
-          - If it's already marked, then perform a hard deletion.
-        """
         environments = self.load_environments()
-        env = self.get_environment(env_id)
+        env = self._find_environment(env_id, environments)
 
         if DELETED_FOLDER_ID in env.folderIds:
-            print("Hard deleting environment")
-            # Hard delete
             self._hard_delete_environment(env, environments)
-            self._save_environments(environments)
-            return env_id
         else:
-            print("Soft deleting environment")
-            # Soft delete: mark as deleted.
             env.folderIds = [DELETED_FOLDER_ID]
             env.metadata["deleted_at"] = time.time()
-            print(f"Env: {env}")
-            print(f"Environments before update: {environments}")
-            self._update_environment(env, environments)
-            print(f"Environments after update: {environments}")
             self._prune_deleted_environments(environments, max_deleted)
-            print(f"Environments after prune: {environments}")
-            self._save_environments(environments)
-            print(f"Environments after save: {environments}")
-            return env_id
 
+        self._save_environments(environments)
+        return env_id
