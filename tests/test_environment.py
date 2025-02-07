@@ -4,13 +4,14 @@ from pathlib import Path
 
 # Import the EnvironmentManager and related classes from your module.
 # Adjust the import if your module structure differs.
-from src.comfy_env_core.environment import (
+from src.comfydock_core.environment import (
     Environment,
     EnvironmentManager,
     EnvironmentUpdate,
     DELETED_FOLDER_ID,
 )
-from src.comfy_env_core.docker_interface import DockerInterfaceContainerNotFoundError
+from src.comfydock_core.docker_interface import DockerInterfaceContainerNotFoundError
+
 
 # --- Fake Docker Interface and Container ---
 
@@ -97,9 +98,9 @@ def fake_persistence(monkeypatch):
         return fake_db.copy()
 
     # Patch the persistence functions in the environment module.
-    import src.comfy_env_core.environment
-    monkeypatch.setattr(src.comfy_env_core.environment, "persistence_save_environments", fake_save)
-    monkeypatch.setattr(src.comfy_env_core.environment, "persistence_load_environments", fake_load)
+    import src.comfydock_core.environment
+    monkeypatch.setattr(src.comfydock_core.environment, "persistence_save_environments", fake_save)
+    monkeypatch.setattr(src.comfydock_core.environment, "persistence_load_environments", fake_load)
     return fake_db
 
 
@@ -115,9 +116,10 @@ def manager(monkeypatch, fake_persistence):
     mgr.docker_iface = FakeDockerInterface()
 
     # Patch generate_id to always return a fixed value ("fixedid")
-    import src.comfy_env_core.environment
-    monkeypatch.setattr(src.comfy_env_core.environment, "generate_id", lambda: "fixedid")
+    import src.comfydock_core.environment
+    monkeypatch.setattr(src.comfydock_core.environment, "generate_id", lambda: "fixedid")
     return mgr
+
 
 
 # --- Tests ---

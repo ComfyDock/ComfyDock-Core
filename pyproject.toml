@@ -1,7 +1,7 @@
 [project]
-name = "comfy_env_core"
+name = "comfydock_core"
 version = "0.1.0"
-description = "Core logic for handling ComfyUI environments"
+description = "Core logic for ComfyDock"
 readme = "README.md"
 authors = [
     { name = "akatz-ai", email = "katzfeyalex+akatzgh@gmail.com" }

@@ -64,7 +64,7 @@ wheels = [
 ]
 
 [[package]]
-name = "comfy-env-core"
+name = "comfydock-core"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

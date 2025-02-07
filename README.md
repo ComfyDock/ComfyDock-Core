@@ -1,6 +1,6 @@
-# ComfyUI Env Core
+# ComfyDock Core
 
-Core logic for handling ComfyUI environments.
+Core logic for ComfyDock.
 
 ## Installation
 

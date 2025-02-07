@@ -4,7 +4,7 @@ import pytest
 from pathlib import Path
 import subprocess
 
-from src.comfy_env_core.comfyui_integration import (
+from src.comfydock_core.comfyui_integration import (
     is_comfyui_repo,
     check_comfyui_path,
     try_install_comfyui,
@@ -116,7 +116,7 @@ def test_try_install_comfyui_install(monkeypatch, tmp_path):
     def fake_check(path: str):
         # Assume that after cloning, the valid installation is at path/ComfyUI.
         return Path(path) / COMFYUI_DIRECTORY_NAME
-    monkeypatch.setattr("src.comfy_env_core.comfyui_integration.check_comfyui_path", fake_check)
+    monkeypatch.setattr("src.comfydock_core.comfyui_integration.check_comfyui_path", fake_check)
     result = try_install_comfyui(str(base))
     expected = str(base / COMFYUI_DIRECTORY_NAME)
     assert result == expected

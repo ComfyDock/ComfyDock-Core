@@ -6,13 +6,14 @@ from pathlib import Path
 import docker.errors
 from docker.types import Mount
 
-from src.comfy_env_core.docker_interface import (
+from src.comfydock_core.docker_interface import (
     DockerInterface,
     DockerInterfaceError,
     DockerInterfaceConnectionError,
     DockerInterfaceContainerNotFoundError,
     DockerInterfaceImageNotFoundError,
 )
+
 
 # --- Updated Dummy Classes to Simulate Docker Behavior ---
 
@@ -118,7 +119,7 @@ def docker_iface(monkeypatch):
     """
     def fake_from_env(*args, **kwargs):
         return DummyDockerClient()
-    monkeypatch.setattr("src.comfy_env_core.docker_interface.docker.from_env", fake_from_env)
+    monkeypatch.setattr("src.comfydock_core.docker_interface.docker.from_env", fake_from_env)
     return DockerInterface()
 
 # --- Tests for Initialization ---
@@ -126,13 +127,13 @@ def docker_iface(monkeypatch):
 def test_init_success(monkeypatch):
     def fake_from_env(*args, **kwargs):
         return DummyDockerClient()
-    monkeypatch.setattr("src.comfy_env_core.docker_interface.docker.from_env", fake_from_env)
+    monkeypatch.setattr("src.comfydock_core.docker_interface.docker.from_env", fake_from_env)
     iface = DockerInterface()
     assert hasattr(iface, "client")
 
 def test_init_connection_error(monkeypatch):
     monkeypatch.setattr(
-        "src.comfy_env_core.docker_interface.docker.from_env",
+        "src.comfydock_core.docker_interface.docker.from_env",
         lambda *args, **kwargs: (_ for _ in ()).throw(docker.errors.DockerException("error"))
     )
     with pytest.raises(DockerInterfaceConnectionError):

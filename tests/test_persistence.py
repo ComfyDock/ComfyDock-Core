@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import patch
 from filelock import Timeout
 
-from src.comfy_env_core.persistence import load_environments, save_environments, PersistenceError
+from src.comfydock_core.persistence import load_environments, save_environments, PersistenceError
 
 
 @pytest.fixture

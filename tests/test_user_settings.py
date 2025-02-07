@@ -7,11 +7,12 @@ import pytest
 # To run: uv run pytest .\tests\test_user_settings.py
 
 # Import the module we want to test.
-from src.comfy_env_core import user_settings
+from src.comfydock_core import user_settings
 
 # Use a fixture to override the file paths in user_settings with temporary ones.
 @pytest.fixture
 def temp_settings_dir(tmp_path):
+
 
     # Save original global values.
     original_settings_file = user_settings.USER_SETTINGS_FILE
