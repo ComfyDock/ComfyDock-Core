@@ -1,5 +1,6 @@
 # environment.py
 
+import asyncio
 import time
 import logging
 from pathlib import Path
@@ -12,6 +13,7 @@ from .persistence import (
     load_environments as persistence_load_environments,
     PersistenceError,
 )
+
 from .utils import generate_id
 
 # Set up custom logger for EnvironmentManager
@@ -55,10 +57,36 @@ class EnvironmentManager:
         self.db_file = db_file
         self.lock_file = lock_file
         self.docker_iface = DockerInterface()
+        self.ws_manager = None
         logger.info("Initialized EnvironmentManager with db_file: %s and lock_file: %s", self.db_file, self.lock_file)
+        
+    def set_ws_manager(self, manager):
+        self.ws_manager = manager
+        
+    async def notify_update(self):
+        if self.ws_manager:
+            # environments = self.load_environments()
+            await self.ws_manager.broadcast({
+                "type": "environments_update",
+                # "data": [env.model_dump() for env in environments]
+            })
+            
+    async def monitor_docker_events(self):
+        """Non-blocking Docker event monitoring"""
+        logger.info("Starting Docker event monitoring")
+        try:
+            async for event in self.docker_iface.event_listener():
+                logger.debug("Docker event: %s", event)
+                if event.get('Type') == 'container':
+                    await self.notify_update()
+        except asyncio.CancelledError:
+            logger.info("Docker event monitoring stopped")
+        except Exception as e:
+            logger.error("Error in Docker event monitoring: %s", e)
 
     def _validate_environments_list(self, environments: List[Environment]) -> None:
         logger.debug("Validating environments list with %d environments", len(environments))
+
         if not all(isinstance(env, Environment) for env in environments):
             logger.error("Validation failed: Not all items are Environment instances")
             raise ValueError("All environments must be Environment instances.")
@@ -190,8 +218,13 @@ class EnvironmentManager:
         environments = self.load_environments()
         self.check_environment_name(env, environments)
 
-        logger.info("Pulling image: %s", env.image)
-        self.docker_iface.try_pull_image(env.image)
+        # Check if image exists locally, if not throw an error
+        logger.info("Checking if image exists locally: %s", env.image)
+        img = self.docker_iface.get_image(env.image)
+        if img is None:
+            logger.error("Image %s not found locally", env.image)
+            raise RuntimeError(f"Image {env.image} not found locally")
+        
         mounts, port, command, device_requests = self._create_container_config(env)
         
         env.container_name = self._generate_container_name()

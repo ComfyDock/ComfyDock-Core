@@ -1,12 +1,11 @@
 # user_settings.py
 
 import json
+import uuid
 from pathlib import Path
 from filelock import FileLock, Timeout
 from pydantic import BaseModel, ValidationError
-
-USER_SETTINGS_FILE = "user.settings.json"
-USER_SETTINGS_LOCK_FILE = f"{USER_SETTINGS_FILE}.lock"
+from typing import Optional, List, Dict, Any
 
 
 class Folder(BaseModel):
@@ -19,7 +18,7 @@ class UserSettings(BaseModel):
     port: int = 8188
     runtime: str = "nvidia"
     command: str = ""
-    folders: list[Folder] = []
+    folders: List[Folder] = []
     max_deleted_environments: int = 10
 
 
@@ -28,78 +27,113 @@ class UserSettingsError(Exception):
     pass
 
 
-def load_user_settings(default_comfyui_path: str) -> UserSettings:
-    """
-    Load user settings from the JSON file.
-    If the file does not exist, returns default settings with the provided comfyui_path.
+class UserSettingsManager:
+    def __init__(
+        self,
+        settings_file: str = "user.settings.json",
+        lock_file: Optional[str] = None,
+        lock_timeout: int = 10
+    ):
+        self.settings_file = Path(settings_file)
+        self.lock_file = Path(lock_file or f"{settings_file}.lock")
+        self.lock_timeout = lock_timeout
 
-    Args:
-        default_comfyui_path (str): The default path to use if settings file is missing.
+    def _acquire_lock(self) -> FileLock:
+        """Create and acquire a file lock with configured timeout."""
+        return FileLock(self.lock_file, timeout=self.lock_timeout)
 
-    Returns:
-        UserSettings: The loaded or default user settings.
-
-    Raises:
-        UserSettingsError: If there is an error acquiring the lock, parsing JSON, or validating data.
-    """
-    lock = FileLock(USER_SETTINGS_LOCK_FILE, timeout=10)
-    try:
-        with lock:
-            if Path(USER_SETTINGS_FILE).exists():
-                with open(USER_SETTINGS_FILE, "r") as f:
-                    data = json.load(f)
-                    try:
+    def load(self, default_comfyui_path: str) -> UserSettings:
+        """
+        Load user settings from the configured file.
+        Creates default settings if file doesn't exist.
+        """
+        lock = self._acquire_lock()
+        try:
+            with lock:
+                if self.settings_file.exists():
+                    with open(self.settings_file, "r") as f:
+                        data = json.load(f)
                         return UserSettings(**data)
-                    except ValidationError as e:
-                        raise UserSettingsError(
-                            f"Validation error in user settings: {e}"
-                        )
-            else:
-                return UserSettings(comfyui_path=default_comfyui_path)
-    except Timeout:
-        raise UserSettingsError("Could not acquire file lock to load user settings.")
-    except Exception as e:
-        raise UserSettingsError(f"Error loading user settings: {e}")
+                else:
+                    return UserSettings(comfyui_path=default_comfyui_path)
+        except Timeout:
+            raise UserSettingsError("Could not acquire file lock to load settings")
+        except (ValidationError, json.JSONDecodeError) as e:
+            raise UserSettingsError(f"Invalid settings format: {str(e)}")
+        except Exception as e:
+            raise UserSettingsError(f"Error loading settings: {str(e)}")
 
+    def save(self, settings: UserSettings) -> None:
+        """Save user settings to the configured file."""
+        lock = self._acquire_lock()
+        try:
+            with lock:
+                with open(self.settings_file, "w") as f:
+                    json.dump(settings.model_dump(), f, indent=4)
+        except Timeout:
+            raise UserSettingsError("Could not acquire file lock to save settings")
+        except Exception as e:
+            raise UserSettingsError(f"Error saving settings: {str(e)}")
 
-def save_user_settings(settings: UserSettings):
-    """
-    Save user settings to the JSON file.
+    def update(self, new_settings: Dict[str, Any], default_comfyui_path: str) -> UserSettings:
+        """Update settings with partial values and persist changes."""
+        current = self.load(default_comfyui_path)
+        updated = current.model_copy(update=new_settings)
+        self.save(updated)
+        return updated
 
-    Args:
-        settings (UserSettings): The user settings to save.
+    def create_folder(self, settings: UserSettings, folder_name: str) -> UserSettings:
+        """Create a new folder in the settings with validation."""
+        if len(folder_name) > 128:
+            raise ValueError("Folder name exceeds 128 characters limit")
+        
+        if any(f.name == folder_name for f in settings.folders):
+            raise ValueError("Folder name must be unique")
+        
+        new_folder = Folder(
+            id=str(uuid.uuid4()),
+            name=folder_name
+        )
+        settings.folders.append(new_folder)
+        return settings
 
-    Raises:
-        UserSettingsError: If there is an error acquiring the lock or writing the file.
-    """
-    lock = FileLock(USER_SETTINGS_LOCK_FILE, timeout=10)
-    try:
-        with lock:
-            with open(USER_SETTINGS_FILE, "w") as f:
-                json.dump(settings.model_dump(), f, indent=4)
-    except Timeout:
-        raise UserSettingsError("Could not acquire file lock to save user settings.")
-    except Exception as e:
-        raise UserSettingsError(f"Error saving user settings: {e}")
+    def update_folder(
+        self,
+        settings: UserSettings,
+        folder_id: str,
+        new_name: str
+    ) -> UserSettings:
+        """Update an existing folder's name with validation."""
+        folder = next((f for f in settings.folders if f.id == folder_id), None)
+        if not folder:
+            raise ValueError("Folder not found")
+        
+        if len(new_name) > 128:
+            raise ValueError("Folder name exceeds 128 characters limit")
+        
+        if any(f.name == new_name and f.id != folder_id for f in settings.folders):
+            raise ValueError("Folder name must be unique")
+        
+        folder.name = new_name
+        return settings
 
+    def delete_folder(self, settings: UserSettings, folder_id: str) -> UserSettings:
+        """Delete a folder from settings if it exists."""
+        original_count = len(settings.folders)
+        settings.folders = [f for f in settings.folders if f.id != folder_id]
+        
+        if len(settings.folders) == original_count:
+            raise ValueError("Folder not found")
+        
+        return settings
 
-def update_user_settings(new_settings: dict) -> UserSettings:
-    """
-    Update user settings with new values.
-
-    Args:
-        new_settings (dict): A dictionary of values to update.
-
-    Returns:
-        UserSettings: The updated user settings.
-
-    Raises:
-        UserSettingsError: If an error occurs during update.
-    """
-    try:
-        current_settings = load_user_settings(new_settings.get("comfyui_path", ""))
-        updated_settings = current_settings.model_copy(update=new_settings)
-        save_user_settings(updated_settings)
-        return updated_settings
-    except Exception as e:
-        raise UserSettingsError(f"Error updating user settings: {e}")
+    def validate_folder_usage(
+        self,
+        settings: UserSettings,
+        folder_id: str,
+        environment_manager: Any  # Should use proper type hint for EnvironmentManager
+    ) -> None:
+        """Check if a folder is used by any environments."""
+        envs = environment_manager.load_environments()
+        if any(folder_id in env.folderIds for env in envs):
+            raise ValueError("Folder contains environments and cannot be deleted")

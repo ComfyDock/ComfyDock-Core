@@ -1,5 +1,6 @@
 # docker_interface.py
 
+import asyncio
 from pathlib import Path
 import posixpath
 import tarfile
@@ -8,6 +9,8 @@ from docker.types import Mount
 from docker.errors import APIError, NotFound
 import tempfile
 import re
+
+from aiodocker import Docker
 
 # Constants used by the interface
 CONTAINER_COMFYUI_PATH = "/app/ComfyUI"
@@ -51,7 +54,19 @@ class DockerInterface:
             raise DockerInterfaceConnectionError(
                 "Failed to connect to Docker. Please ensure your Docker client is running."
             )
-
+            
+    async def event_listener(self):
+        """Async generator for Docker events"""
+        async with Docker() as docker:
+            self._event_subscriber = docker.events.subscribe()
+            try:
+                while True:
+                    event = await self._event_subscriber.get()
+                    if event is None:
+                        break
+                    yield event
+            except asyncio.CancelledError:
+                print("Event listening cancelled")
 
     def create_container(self, image: str, name: str, command: str, runtime=None,
                         device_requests=None, ports: dict = None, mounts=None):
