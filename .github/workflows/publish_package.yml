@@ -33,6 +33,7 @@ jobs:
       id: version
       run: |
         VERSION=$(grep 'version =' pyproject.toml | sed -n 's/.*version = "\(.*\)"/\1/p')
+        echo "Extracted version: $VERSION"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
     # - name: Create and push version tag
