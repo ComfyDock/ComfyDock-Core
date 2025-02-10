@@ -1,0 +1,51 @@
+name: Publish Python Package
+
+on:
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # For creating tags
+      id-token: write  # Required for trusted publishing
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: "0.5.29"
+        enable-cache: true  # Optional but recommended for faster builds
+
+    - name: Set up Python
+      run: uv python install  # Uses version from pyproject.toml
+
+    - name: Install dependencies
+      run: uv sync --group dev  # Install dev dependencies including pytest
+
+    - name: Run tests
+      run: uv run pytest tests/  # Run tests from tests directory
+
+    - name: Extract package version
+      id: version
+      run: |
+        VERSION=$(grep 'version =' pyproject.toml | sed -n 's/.*version = "\(.*\)"/\1/p')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    # - name: Create and push version tag
+    #   run: |
+    #     git config --global user.name "GitHub Actions"
+    #     git config --global user.email "actions@github.com"
+    #     git tag v${{ steps.version.outputs.version }}
+    #     git push origin v${{ steps.version.outputs.version }}
+
+    # - name: Build package
+    #   run: uv build --no-sources  # Build without tool.uv.sources
+
+    # - name: Publish to PyPI
+    #   run: uv publish
+    #   env:
+    #     UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
