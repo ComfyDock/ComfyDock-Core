@@ -11,40 +11,51 @@ import tempfile
 import re
 
 from aiodocker import Docker
+from .logging import get_logger
+
+logger = get_logger(__name__)
 
 # Constants used by the interface
 CONTAINER_COMFYUI_PATH = "/app/ComfyUI"
 SIGNAL_TIMEOUT = 2
-BLACKLIST_REQUIREMENTS = ['torch']
-EXCLUDE_CUSTOM_NODE_DIRS = ['__pycache__', 'ComfyUI-Manager']
+BLACKLIST_REQUIREMENTS = ["torch"]
+EXCLUDE_CUSTOM_NODE_DIRS = ["__pycache__", "ComfyUI-Manager"]
+
 
 class DockerInterfaceError(Exception):
     """
     Base class for Docker interface errors.
     """
+
     pass
+
 
 class DockerInterfaceConnectionError(DockerInterfaceError):
     """
     Error raised when the Docker client fails to connect.
     """
+
     pass
+
 
 class DockerInterfaceContainerNotFoundError(DockerInterfaceError):
     """
     Error raised when a container is not found.
     """
+
     pass
+
 
 class DockerInterfaceImageNotFoundError(DockerInterfaceError):
     """
     Error raised when an image is not found.
     """
+
     pass
+
 
 class DockerInterface:
     def __init__(self, timeout: int = 360):
-
         """
         Initialize the Docker client.
         """
@@ -54,7 +65,7 @@ class DockerInterface:
             raise DockerInterfaceConnectionError(
                 "Failed to connect to Docker. Please ensure your Docker client is running."
             )
-            
+
     async def event_listener(self):
         """Async generator for Docker events"""
         async with Docker() as docker:
@@ -66,10 +77,18 @@ class DockerInterface:
                         break
                     yield event
             except asyncio.CancelledError:
-                print("Event listening cancelled")
+                logger.info("Event listening cancelled")
 
-    def create_container(self, image: str, name: str, command: str, runtime=None,
-                        device_requests=None, ports: dict = None, mounts=None):
+    def create_container(
+        self,
+        image: str,
+        name: str,
+        command: str,
+        runtime=None,
+        device_requests=None,
+        ports: dict = None,
+        mounts=None,
+    ):
         """
         Create a new container.
         """
@@ -94,10 +113,11 @@ class DockerInterface:
         try:
             return self.client.containers.get(container_id)
         except NotFound:
-            raise DockerInterfaceContainerNotFoundError(f"Container {container_id} not found.")
+            raise DockerInterfaceContainerNotFoundError(
+                f"Container {container_id} not found."
+            )
         except APIError as e:
             raise DockerInterfaceError(str(e))
-
 
     def commit_container(self, container, repository: str, tag: str):
         """
@@ -130,10 +150,9 @@ class DockerInterface:
         except APIError as e:
             raise DockerInterfaceError(str(e))
 
-
     def start_container(self, container):
         """
-        Start the container if it isn’t running.
+        Start the container if it isn't running.
         """
         try:
             if container.status != "running":
@@ -176,34 +195,37 @@ class DockerInterface:
         """
         try:
             self.client.images.get(image)
-            print(f"Image {image} found locally.")
+            logger.info("Image %s found locally.", image)
         except docker.errors.ImageNotFound:
-            print(f"Image {image} not found locally. Pulling from Docker Hub...")
+            logger.info("Image %s not found locally. Pulling from Docker Hub...", image)
             try:
                 self.client.images.pull(image)
-                print(f"Image {image} successfully pulled from Docker Hub.")
+                logger.info("Image %s successfully pulled from Docker Hub.", image)
             except APIError as e:
-                print(f"Error pulling image {image}: {e}")
+                logger.error("Error pulling image %s: %s", image, e)
                 raise DockerInterfaceError(str(e))
         except APIError as e:
-            print(f"Error pulling image {image}: {e}")
+            logger.error("Error pulling image %s: %s", image, e)
             raise DockerInterfaceError(str(e))
 
-    def run_container(self, image: str, name: str, ports: dict, detach: bool = True, remove: bool = True):
+    def run_container(
+        self,
+        image: str,
+        name: str,
+        ports: dict,
+        detach: bool = True,
+        remove: bool = True,
+    ):
         """
         Run a container from the given image with specified parameters.
         """
         try:
             container = self.client.containers.run(
-                image,
-                name=name,
-                ports=ports,
-                detach=detach,
-                remove=remove
+                image, name=name, ports=ports, detach=detach, remove=remove
             )
             return container
         except APIError as e:
-            print(f"Error running container {name} with image {image}: {e}")
+            logger.error("Error running container %s with image %s: %s", name, image, e)
             raise DockerInterfaceError(str(e))
 
     def ensure_directory_exists(self, container, path: str):
@@ -213,10 +235,16 @@ class DockerInterface:
         try:
             container.exec_run(f"mkdir -p {path}")
         except APIError as e:
-            print(f"Error creating directory {path} in container: {e}")
+            logger.error("Error creating directory %s in container: %s", path, e)
             raise DockerInterfaceError(str(e))
 
-    def copy_to_container(self, container_id: str, source_path: str, container_path: str, exclude_dirs: list = []):
+    def copy_to_container(
+        self,
+        container_id: str,
+        source_path: str,
+        container_path: str,
+        exclude_dirs: list = [],
+    ):
         """
         Copy a directory or file from the host into a container.
         """
@@ -226,27 +254,42 @@ class DockerInterface:
             with tempfile.TemporaryDirectory() as temp_dir:
                 tar_path = Path(temp_dir) / "archive.tar"
                 with tarfile.open(tar_path, mode="w") as archive:
-                    for path in Path(source_path).rglob('*'):
+                    for path in Path(source_path).rglob("*"):
                         if path.is_dir() and path.name in exclude_dirs:
                             continue
                         relative_path = path.relative_to(source_path)
                         archive.add(str(path), arcname=str(relative_path))
                 with open(tar_path, "rb") as tar_data:
-                    print(f"Sending {source_path} to {container_id}:{container_path}")
+                    logger.info(
+                        "Sending %s to %s:%s", source_path, container_id, container_path
+                    )
                     try:
                         container.put_archive(container_path, tar_data)
-                        print(f"Copied {source_path} to {container_id}:{container_path}")
+                        logger.info(
+                            "Copied %s to %s:%s",
+                            source_path,
+                            container_id,
+                            container_path,
+                        )
                     except Exception as e:
-                        print(f"Error sending {source_path} to {container_id}:{container_path}: {e}")
+                        logger.error(
+                            "Error sending %s to %s:%s: %s",
+                            source_path,
+                            container_id,
+                            container_path,
+                            e,
+                        )
                         raise
         except docker.errors.NotFound:
-            print(f"Container {container_id} not found.")
-            raise DockerInterfaceContainerNotFoundError(f"Container {container_id} not found.")
+            logger.error("Container %s not found.", container_id)
+            raise DockerInterfaceContainerNotFoundError(
+                f"Container {container_id} not found."
+            )
         except APIError as e:
-            print(f"Docker API error: {e}")
+            logger.error("Docker API error: %s", e)
             raise DockerInterfaceError(str(e))
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
+            logger.error("An unexpected error occurred: %s", e)
             raise DockerInterfaceError(str(e))
 
     def convert_old_to_new_style(self, old_config: dict, comfyui_path: Path) -> dict:
@@ -263,57 +306,74 @@ class DockerInterface:
                 "container_path": container_subdir.as_posix(),
                 "host_path": host_subdir.as_posix(),
                 "type": "mount",
-                "read_only": False
+                "read_only": False,
             }
             new_config["mounts"].append(mount_entry)
         return new_config
 
-    def _process_copy_mount(self, mount: dict, comfyui_path: Path, container_id: str) -> bool:
+    def _process_copy_mount(
+        self, mount: dict, comfyui_path: Path, container_id: str
+    ) -> bool:
         """
         Process a mount entry with type 'copy'.
         """
         host_path_str = mount.get("host_path")
         container_path = mount.get("container_path")
         if not host_path_str or not container_path:
-            print(f"Skipping mount entry because host_path or container_path is missing: {mount}")
+            logger.info(
+                "Skipping mount entry because host_path or container_path is missing: %s",
+                mount,
+            )
             return False
         source_path = Path(host_path_str)
         if not source_path.is_absolute():
             source_path = (comfyui_path / source_path).resolve()
         if source_path.exists():
-            print(f"Copying {source_path} to container at {container_path}")
-            self.copy_to_container(container_id, str(source_path), container_path, EXCLUDE_CUSTOM_NODE_DIRS)
+            logger.info("Copying %s to container at %s", source_path, container_path)
+            self.copy_to_container(
+                container_id, str(source_path), container_path, EXCLUDE_CUSTOM_NODE_DIRS
+            )
             if "custom_nodes" in container_path:
-                self.install_custom_nodes(container_id, BLACKLIST_REQUIREMENTS, EXCLUDE_CUSTOM_NODE_DIRS)
+                self.install_custom_nodes(
+                    container_id, BLACKLIST_REQUIREMENTS, EXCLUDE_CUSTOM_NODE_DIRS
+                )
                 return True
         else:
-            print(f"Local path does not exist: {source_path}")
+            logger.info("Local path does not exist: %s", source_path)
         return False
 
-    def _process_mount_mount(self, mount: dict, comfyui_path: Path, container_id: str) -> bool:
+    def _process_mount_mount(
+        self, mount: dict, comfyui_path: Path, container_id: str
+    ) -> bool:
         """
         For backward compatibility: if a mount entry of type 'mount' points to custom_nodes,
         run the custom nodes installation.
         """
-        if mount.get("type") == "mount" and "custom_nodes" in mount.get("container_path", ""):
-            self.install_custom_nodes(container_id, BLACKLIST_REQUIREMENTS, EXCLUDE_CUSTOM_NODE_DIRS)
+        if mount.get("type") == "mount" and "custom_nodes" in mount.get(
+            "container_path", ""
+        ):
+            self.install_custom_nodes(
+                container_id, BLACKLIST_REQUIREMENTS, EXCLUDE_CUSTOM_NODE_DIRS
+            )
             return True
         return False
 
-    def copy_directories_to_container(self, container_id: str, comfyui_path: Path, mount_config: dict) -> bool:
+    def copy_directories_to_container(
+        self, container_id: str, comfyui_path: Path, mount_config: dict
+    ) -> bool:
         """
         Copy specified directories from the host to the container based on the mount configuration.
         Supports both new-style (with a "mounts" list) and old-style configurations.
         Returns True if custom nodes were installed.
         """
         installed_custom_nodes = False
-        print(f'copy_directories_to_container: mount_config: {mount_config}')
+        logger.info("copy_directories_to_container: mount_config: %s", mount_config)
         if "mounts" in mount_config and isinstance(mount_config["mounts"], list):
             config = mount_config
         else:
-            print("Detected old style mount config. Converting to new style.")
+            logger.info("Detected old style mount config. Converting to new style.")
             config = self.convert_old_to_new_style(mount_config, comfyui_path)
-        print(f"Using mount config: {config}")
+        logger.info("Using mount config: %s", config)
         for mount in config.get("mounts", []):
             action = mount.get("type", "").lower()
             if action == "copy":
@@ -325,56 +385,81 @@ class DockerInterface:
                     installed_custom_nodes = True
         return installed_custom_nodes
 
-    def install_custom_nodes(self, container_id: str, blacklist: list = [], exclude_dirs: list = []):
+    def install_custom_nodes(
+        self, container_id: str, blacklist: list = [], exclude_dirs: list = []
+    ):
         """
         Install custom nodes by checking for requirements.txt files within the custom_nodes directory
         and running pip install for non-blacklisted dependencies.
         """
         container_custom_nodes_path = CONTAINER_COMFYUI_PATH + "/custom_nodes"
         container = self.get_container(container_id)
-        exclude_conditions = ' '.join(f"-not -name '{dir_name}'" for dir_name in exclude_dirs)
+        exclude_conditions = " ".join(
+            f"-not -name '{dir_name}'" for dir_name in exclude_dirs
+        )
         exec_command = f"sh -c 'find {container_custom_nodes_path} -mindepth 1 -maxdepth 1 -type d {exclude_conditions}'"
-        exec_id = container.exec_run(exec_command, stdout=True, stderr=True, stream=True)
+        exec_id = container.exec_run(
+            exec_command, stdout=True, stderr=True, stream=True
+        )
         output = []
-        print("Listing directories in custom_nodes path:")
+        logger.info("Listing directories in custom_nodes path:")
         for line in exec_id.output:
-            decoded_line = line.decode('utf-8').strip()
-            print(decoded_line)
+            decoded_line = line.decode("utf-8").strip()
+            logger.info(decoded_line)
             output.append(decoded_line)
-        output = '\n'.join(output).split('\n') if output else []
-        print(output)
+        output = "\n".join(output).split("\n") if output else []
+        logger.info(output)
         for custom_node in output:
-            print(f"Checking {custom_node}")
-            requirements_path = posixpath.join(container_custom_nodes_path, custom_node, "requirements.txt")
-            check_command = f"sh -c '[ -f {requirements_path} ] && echo exists || echo not_exists'"
+            logger.info("Checking %s", custom_node)
+            requirements_path = posixpath.join(
+                container_custom_nodes_path, custom_node, "requirements.txt"
+            )
+            check_command = (
+                f"sh -c '[ -f {requirements_path} ] && echo exists || echo not_exists'"
+            )
             check_exec_id = container.exec_run(check_command, stdout=True, stderr=True)
-            if check_exec_id.output.decode('utf-8').strip() == "exists":
-                print(f"Found requirements.txt in {custom_node}, checking for blacklisted dependencies...")
+            if check_exec_id.output.decode("utf-8").strip() == "exists":
+                logger.info(
+                    "Found requirements.txt in %s, checking for blacklisted dependencies...",
+                    custom_node,
+                )
                 read_command = f"sh -c 'cat {requirements_path}'"
-                read_exec_id = container.exec_run(read_command, stdout=True, stderr=True)
-                requirements_content = read_exec_id.output.decode('utf-8').strip().split('\n')
+                read_exec_id = container.exec_run(
+                    read_command, stdout=True, stderr=True
+                )
+                requirements_content = (
+                    read_exec_id.output.decode("utf-8").strip().split("\n")
+                )
                 filtered_requirements = []
                 for line in requirements_content:
-                    match = re.match(r'^\s*([a-zA-Z0-9\-_]+)', line)
+                    match = re.match(r"^\s*([a-zA-Z0-9\-_]+)", line)
                     if match:
                         package_name = match.group(1)
                         if package_name in blacklist:
-                            print(f"Skipping blacklisted dependency: {line}")
+                            logger.info("Skipping blacklisted dependency: %s", line)
                             continue
                     filtered_requirements.append(line)
                 if filtered_requirements:
-                    temp_requirements_path = posixpath.join(container_custom_nodes_path, custom_node, "temp_requirements.txt")
+                    temp_requirements_path = posixpath.join(
+                        container_custom_nodes_path,
+                        custom_node,
+                        "temp_requirements.txt",
+                    )
                     create_temp_command = f"sh -c 'echo \"{chr(10).join(filtered_requirements)}\" > {temp_requirements_path}'"
                     container.exec_run(create_temp_command, stdout=True, stderr=True)
-                    print(f"Installing non-blacklisted dependencies for {custom_node}...")
+                    logger.info(
+                        "Installing non-blacklisted dependencies for %s...", custom_node
+                    )
                     install_command = f"sh -c 'pip install -r {temp_requirements_path}'"
-                    install_exec_id = container.exec_run(install_command, stdout=True, stderr=True, stream=True)
+                    install_exec_id = container.exec_run(
+                        install_command, stdout=True, stderr=True, stream=True
+                    )
                     for line in install_exec_id.output:
-                        print(line.decode('utf-8').strip())
+                        logger.info(line.decode("utf-8").strip())
                     remove_temp_command = f"sh -c 'rm {temp_requirements_path}'"
                     container.exec_run(remove_temp_command, stdout=True, stderr=True)
             else:
-                print(f"No requirements.txt found in {custom_node}.")
+                logger.info("No requirements.txt found in %s.", custom_node)
 
     def restart_container(self, container_id: str):
         """
@@ -390,40 +475,55 @@ class DockerInterface:
         """
         Create Docker mount bindings from a new-style mount configuration.
         """
-        print(f"Creating mounts for environment")
+        logger.info("Creating mounts for environment")
         mounts = []
         user_mounts = mount_config.get("mounts", [])
         for m in user_mounts:
-            print(f"Mount: {m}")
+            logger.info("Mount: %s", m)
             action = m.get("type", "").lower()
             if action not in ["mount", "copy"]:
-                print(f"Skipping mount for {m} because type is '{action}' (not 'mount' or 'copy').")
+                logger.info(
+                    "Skipping mount for %s because type is '%s' (not 'mount' or 'copy').",
+                    m,
+                    action,
+                )
                 continue
             container_path = m.get("container_path")
             host_path = m.get("host_path")
             if not container_path or not host_path:
-                print(f"Skipping entry {m} because container_path or host_path is missing.")
+                logger.info(
+                    "Skipping entry %s because container_path or host_path is missing.",
+                    m,
+                )
                 continue
             source_path = Path(host_path)
-            print(f"source_path: {source_path}")
+            logger.info("source_path: %s", source_path)
             if not source_path.is_absolute():
                 source_path = comfyui_path / source_path
-                print(f"source_path: {source_path}")
+                logger.info("source_path: %s", source_path)
             if not source_path.exists():
-                print(f"Host directory does not exist: {source_path}. Creating directory.")
+                logger.info(
+                    "Host directory does not exist: %s. Creating directory.",
+                    source_path,
+                )
                 source_path.mkdir(parents=True, exist_ok=True)
             source_str = str(source_path.resolve())
-            print(f"source_str: {source_str}")
+            logger.info("source_str: %s", source_str)
             target_str = str(Path(container_path).as_posix())
-            print(f"target_str: {target_str}")
+            logger.info("target_str: %s", target_str)
             read_only = m.get("read_only", False)
-            print(f"Mounting host '{source_str}' to container '{target_str}' (read_only={read_only})")
+            logger.info(
+                "Mounting host '%s' to container '%s' (read_only=%s)",
+                source_str,
+                target_str,
+                read_only,
+            )
             mounts.append(
                 Mount(
                     target=target_str,
                     source=source_str,
-                    type='bind',
-                    read_only=read_only
+                    type="bind",
+                    read_only=read_only,
                 )
             )
         # Optionally add the /usr/lib/wsl mount if it exists.
@@ -433,7 +533,7 @@ class DockerInterface:
                 Mount(
                     target="/usr/lib/wsl",
                     source=str(wsl_path),
-                    type='bind',
+                    type="bind",
                     read_only=True,
                 )
             )
@@ -445,6 +545,6 @@ class DockerInterface:
         """
         config = mount_config
         if "mounts" not in config or not isinstance(config["mounts"], list):
-            print("Detected old style mount config. Converting to new style.")
+            logger.info("Detected old style mount config. Converting to new style.")
             config = self.convert_old_to_new_style(mount_config, comfyui_path)
         return self._create_mounts_from_new_config(config, comfyui_path)

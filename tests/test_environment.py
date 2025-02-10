@@ -58,9 +58,13 @@ class FakeDockerInterface:
     def create_mounts(self, mount_config, comfyui_path):
         # Return an empty mounts list for simplicity.
         return []
+    
+    def get_image(self, image):
+        return image
 
     def start_container(self, container):
         container.start()
+
 
     def stop_container(self, container, timeout=2):
         container.stop(timeout)

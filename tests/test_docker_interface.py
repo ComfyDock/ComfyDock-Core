@@ -1,5 +1,6 @@
 # test_docker_interface.py
 
+import logging
 import pytest
 from pathlib import Path
 
@@ -122,6 +123,24 @@ def docker_iface(monkeypatch):
     monkeypatch.setattr("src.comfydock_core.docker_interface.docker.from_env", fake_from_env)
     return DockerInterface()
 
+@pytest.fixture(autouse=True)
+def setup_logging():
+    """Fixture to setup logging before each test"""
+    # Create logger
+    logger = logging.getLogger('src.comfydock_core.docker_interface')
+    # Set level
+    logger.setLevel(logging.INFO)
+    # Create handler
+    handler = logging.StreamHandler()
+    # Create formatter
+    formatter = logging.Formatter('%(message)s')
+    handler.setFormatter(formatter)
+    # Add handler to logger
+    logger.addHandler(handler)
+    yield
+    # Clean up
+    logger.handlers = []
+
 # --- Tests for Initialization ---
 
 def test_init_success(monkeypatch):
@@ -205,18 +224,21 @@ def test_pull_image_api(docker_iface):
     first = next(gen)
     assert "status" in first
 
-def test_try_pull_image_image_exists(docker_iface, capsys):
+def test_try_pull_image_image_exists(docker_iface, caplog):
+    caplog.set_level(logging.INFO)
     docker_iface.try_pull_image("dummy_image")
-    captured = capsys.readouterr().out
-    assert "found locally" in captured
+    print(caplog.text)
+    assert "found locally" in caplog.text
 
-def test_try_pull_image_pulls(docker_iface, monkeypatch, capsys):
+
+def test_try_pull_image_pulls(docker_iface, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     def fake_get(image):
         raise docker.errors.ImageNotFound("Not found")
     monkeypatch.setattr(docker_iface.client.images, "get", fake_get)
     docker_iface.try_pull_image("dummy_image")
-    captured = capsys.readouterr().out
-    assert "Pulling from Docker Hub" in captured
+    assert "Pulling from Docker Hub" in caplog.text
+
 
 def test_run_container(docker_iface):
     container = docker_iface.run_container(

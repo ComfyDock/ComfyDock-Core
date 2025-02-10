@@ -3,11 +3,12 @@
 import json
 from pathlib import Path
 import pytest
+from src.comfydock_core.user_settings import UserSettingsManager, UserSettings, UserSettingsError, Folder
 
 # To run: uv run pytest .\tests\test_user_settings.py
 
 # Import the module we want to test.
-from src.comfydock_core import user_settings
+from comfydock_core import user_settings
 
 # Use a fixture to override the file paths in user_settings with temporary ones.
 @pytest.fixture
@@ -34,34 +35,40 @@ def temp_settings_dir(tmp_path):
     user_settings.USER_SETTINGS_FILE = original_settings_file
     user_settings.USER_SETTINGS_LOCK_FILE = original_lock_file
 
-def test_load_default_settings(temp_settings_dir):
-    """
-    If no settings file exists, load_user_settings should return default settings.
-    """
-    default_path = "/default/path"
-    settings = user_settings.load_user_settings(default_path)
-    assert settings.comfyui_path == default_path
+@pytest.fixture
+def settings_manager(tmp_path):
+    """Fixture to create a UserSettingsManager with temporary files"""
+    settings_file = tmp_path / "user.settings.json"
+    lock_file = tmp_path / "user.settings.json.lock"
+    return UserSettingsManager(
+        settings_file=str(settings_file),
+        lock_file=str(lock_file),
+        default_comfyui_path="/default/path"
+    )
+
+def test_load_default_settings(settings_manager):
+    """Test loading default settings when no file exists"""
+    settings = settings_manager.load()
+    assert settings.comfyui_path == "/default/path"
     assert settings.port == 8188
     assert settings.runtime == "nvidia"
     assert settings.command == ""
     assert settings.folders == []
     assert settings.max_deleted_environments == 10
 
-def test_save_and_load_settings(temp_settings_dir):
-    """
-    Test that saving settings and then loading them returns the same data.
-    """
-    default_path = "/my/path"
-    settings = user_settings.UserSettings(
-        comfyui_path=default_path,
+def test_save_and_load_settings(settings_manager):
+    """Test saving settings and loading them back"""
+    settings = UserSettings(
+        comfyui_path="/my/path",
         port=8000,
         runtime="cpu",
         command="run",
-        folders=[user_settings.Folder(id="folder1", name="Folder One")],
+        folders=[Folder(id="folder1", name="Folder One")],
         max_deleted_environments=5
     )
-    user_settings.save_user_settings(settings)
-    loaded_settings = user_settings.load_user_settings(default_path)
+    settings_manager.save(settings)
+    loaded_settings = settings_manager.load()
+    
     assert loaded_settings.comfyui_path == settings.comfyui_path
     assert loaded_settings.port == settings.port
     assert loaded_settings.runtime == settings.runtime
@@ -71,14 +78,8 @@ def test_save_and_load_settings(temp_settings_dir):
     assert loaded_settings.folders[0].name == "Folder One"
     assert loaded_settings.max_deleted_environments == settings.max_deleted_environments
 
-def test_update_settings(temp_settings_dir):
-    """
-    Test that update_user_settings correctly updates the settings.
-    """
-    default_path = "/initial/path"
-    # Ensure we start with default settings.
-    settings = user_settings.load_user_settings(default_path)
-    # Define new values.
+def test_update_settings(settings_manager):
+    """Test updating settings with partial values"""
     new_values = {
         "comfyui_path": "/updated/path",
         "port": 9000,
@@ -86,21 +87,60 @@ def test_update_settings(temp_settings_dir):
         "command": "start",
         "max_deleted_environments": 7
     }
-    updated_settings = user_settings.update_user_settings(new_values)
+    updated_settings = settings_manager.update(new_values)
+    
     assert updated_settings.comfyui_path == "/updated/path"
     assert updated_settings.port == 9000
     assert updated_settings.runtime == "cpu"
     assert updated_settings.command == "start"
     assert updated_settings.max_deleted_environments == 7
 
-def test_corrupt_settings_file(temp_settings_dir):
-    """
-    Create a corrupt JSON settings file and ensure load_user_settings raises a UserSettingsError.
-    """
-    default_path = "/corrupt/path"
-    settings_file_path = Path(user_settings.USER_SETTINGS_FILE)
-    # Write invalid JSON to the file.
-    with open(settings_file_path, "w") as f:
+def test_corrupt_settings_file(settings_manager):
+    """Test handling of corrupt settings file"""
+    # Write invalid JSON to the settings file
+    with open(settings_manager.settings_file, "w") as f:
         f.write("this is not valid JSON")
-    with pytest.raises(user_settings.UserSettingsError):
-        user_settings.load_user_settings(default_path)
+    
+    with pytest.raises(UserSettingsError):
+        settings_manager.load()
+
+def test_create_folder(settings_manager):
+    """Test creating a new folder"""
+    settings = settings_manager.load()
+    updated_settings = settings_manager.create_folder(settings, "New Folder")
+    
+    assert len(updated_settings.folders) == 1
+    assert updated_settings.folders[0].name == "New Folder"
+    assert updated_settings.folders[0].id is not None
+
+def test_create_duplicate_folder(settings_manager):
+    """Test creating a folder with duplicate name"""
+    settings = settings_manager.load()
+    settings_manager.create_folder(settings, "Test Folder")
+    
+    with pytest.raises(ValueError, match="Folder name must be unique"):
+        settings_manager.create_folder(settings, "Test Folder")
+
+def test_update_folder(settings_manager):
+    """Test updating a folder name"""
+    settings = settings_manager.load()
+    settings = settings_manager.create_folder(settings, "Old Name")
+    folder_id = settings.folders[0].id
+    
+    updated_settings = settings_manager.update_folder(settings, folder_id, "New Name")
+    assert updated_settings.folders[0].name == "New Name"
+
+def test_delete_folder(settings_manager):
+    """Test deleting a folder"""
+    settings = settings_manager.load()
+    settings = settings_manager.create_folder(settings, "Test Folder")
+    folder_id = settings.folders[0].id
+    
+    updated_settings = settings_manager.delete_folder(settings, folder_id)
+    assert len(updated_settings.folders) == 0
+
+def test_delete_nonexistent_folder(settings_manager):
+    """Test deleting a folder that doesn't exist"""
+    settings = settings_manager.load()
+    with pytest.raises(ValueError, match="Folder not found"):
+        settings_manager.delete_folder(settings, "nonexistent-id")
