@@ -7,9 +7,11 @@ from filelock import FileLock, Timeout
 from pydantic import BaseModel, ValidationError
 from typing import Optional, List, Dict, Any
 
-from .logging import get_logger
+from comfydock_core.environment import Environment
 
-logger = get_logger(__name__)
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Folder(BaseModel):
@@ -44,6 +46,8 @@ class UserSettingsManager:
         self.lock_file = Path(lock_file or f"{settings_file}.lock")
         self.default_comfyui_path = default_comfyui_path
         self.lock_timeout = lock_timeout
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"UserSettingsManager initialized with settings file: {self.settings_file}")
 
     def _acquire_lock(self) -> FileLock:
         """Create and acquire a file lock with configured timeout."""
@@ -58,10 +62,16 @@ class UserSettingsManager:
         try:
             with lock:
                 if self.settings_file.exists():
-                    with open(self.settings_file, "r") as f:
-                        data = json.load(f)
-                        return UserSettings(**data)
+                    if self.settings_file.is_file():  # Verify it's a file, not a directory
+                        with open(self.settings_file, "r") as f:
+                            logger.info("Loading settings from %s", self.settings_file)
+                            data = json.load(f)
+                            return UserSettings(**data)
+                    else:
+                        logger.error("Settings path exists but is not a file: %s", self.settings_file)
+                        raise UserSettingsError(f"Settings path exists but is not a file: {self.settings_file}")
                 else:
+                    logger.warning("Settings file does not exist, creating default settings")
                     return UserSettings(comfyui_path=self.default_comfyui_path)
         except Timeout:
             logger.error("Could not acquire file lock to load settings")
@@ -79,6 +89,7 @@ class UserSettingsManager:
         try:
             with lock:
                 with open(self.settings_file, "w") as f:
+                    logger.info("Saving settings to %s", self.settings_file)
                     json.dump(settings.model_dump(), f, indent=4)
         except Timeout:
             logger.error("Could not acquire file lock to save settings")
@@ -128,8 +139,12 @@ class UserSettingsManager:
         folder.name = new_name
         return settings
 
-    def delete_folder(self, settings: UserSettings, folder_id: str) -> UserSettings:
+    def delete_folder(self, settings: UserSettings, folder_id: str, envs: List[Environment]) -> UserSettings:
         """Delete a folder from settings if it exists."""
+        
+        # First check if the folder is used by any environments
+        self._validate_folder_usage(folder_id, envs)
+
         original_count = len(settings.folders)
         settings.folders = [f for f in settings.folders if f.id != folder_id]
 
@@ -139,14 +154,13 @@ class UserSettingsManager:
 
         return settings
 
-    def validate_folder_usage(
+    def _validate_folder_usage(
         self,
-        settings: UserSettings,
         folder_id: str,
-        environment_manager: Any,  # Should use proper type hint for EnvironmentManager
+        envs: List[Environment],
     ) -> None:
         """Check if a folder is used by any environments."""
-        envs = environment_manager.load_environments()
+        logger.info(f"Validating folder usage for {folder_id}")
         if any(folder_id in env.folderIds for env in envs):
             logger.error("Folder contains environments and cannot be deleted")
             raise ValueError("Folder contains environments and cannot be deleted")

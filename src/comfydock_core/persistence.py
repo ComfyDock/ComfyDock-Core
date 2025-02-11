@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 from filelock import FileLock, Timeout
 
-from .logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Default file paths for the environments database and its lock file.
 DEFAULT_DB_FILE = "environments.json"
@@ -38,6 +38,7 @@ def load_environments(
     """
     environments = []
     lock = FileLock(lock_file, timeout=10)
+    logger.info(f"Loading environments from {db_file}")
     try:
         with lock:
             if Path(db_file).exists():
@@ -75,9 +76,11 @@ def save_environments(
         PersistenceError: If the file lock cannot be acquired or if any error occurs during saving.
     """
     lock = FileLock(lock_file, timeout=10)
+    logger.info(f"Saving environments to {db_file}")
     try:
         with lock:
             with open(db_file, "w") as f:
+
                 json.dump(environments, f, indent=4)
     except Timeout:
         logger.error("Could not acquire file lock for saving environments.")
