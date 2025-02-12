@@ -11,9 +11,9 @@ import tempfile
 import re
 
 from aiodocker import Docker
-from .logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Constants used by the interface
 CONTAINER_COMFYUI_PATH = "/app/ComfyUI"

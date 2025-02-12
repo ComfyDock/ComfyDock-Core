@@ -2,14 +2,14 @@
 
 from pathlib import Path
 import subprocess
+import logging
 
-from .logging import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Repository configuration
 COMFYUI_REPO_URL = "https://github.com/comfyanonymous/ComfyUI.git"
 COMFYUI_DEFAULT_BRANCH = "master"
+
 COMFYUI_DIRECTORY_NAME = "ComfyUI"
 
 
