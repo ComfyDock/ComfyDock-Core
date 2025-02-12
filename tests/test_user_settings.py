@@ -136,11 +136,14 @@ def test_delete_folder(settings_manager):
     settings = settings_manager.create_folder(settings, "Test Folder")
     folder_id = settings.folders[0].id
     
-    updated_settings = settings_manager.delete_folder(settings, folder_id)
+    envs = []
+    
+    updated_settings = settings_manager.delete_folder(settings, folder_id, envs)
     assert len(updated_settings.folders) == 0
 
 def test_delete_nonexistent_folder(settings_manager):
     """Test deleting a folder that doesn't exist"""
     settings = settings_manager.load()
+    envs = []
     with pytest.raises(ValueError, match="Folder not found"):
-        settings_manager.delete_folder(settings, "nonexistent-id")
+        settings_manager.delete_folder(settings, "nonexistent-id", envs)
