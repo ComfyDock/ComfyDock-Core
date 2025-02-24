@@ -5,11 +5,9 @@ import pytest
 from pathlib import Path
 
 import docker.errors
-from docker.types import Mount
 
 from src.comfydock_core.docker_interface import (
     DockerInterface,
-    DockerInterfaceError,
     DockerInterfaceConnectionError,
     DockerInterfaceContainerNotFoundError,
     DockerInterfaceImageNotFoundError,

@@ -178,11 +178,14 @@ class EnvironmentManager:
 
         if folder_id:
             logger.debug("Filtering environments by folder_id: %s", folder_id)
-            filter_fn = lambda e: (
-                DELETED_FOLDER_ID not in e.folderIds
-                if folder_id == "all"
-                else folder_id in e.folderIds
-            )
+            
+            def filter_fn(e):
+                return (
+                    DELETED_FOLDER_ID not in e.folderIds
+                    if folder_id == "all"
+                    else folder_id in e.folderIds
+                )
+                
             filtered_envs = [env for env in environments if filter_fn(env)]
             logger.debug(
                 "Returning %d environments after filtering", len(filtered_envs)
