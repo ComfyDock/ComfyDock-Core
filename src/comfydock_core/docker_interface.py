@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+import platform
 import posixpath
 import tarfile
 import docker
@@ -526,13 +527,14 @@ class DockerInterface:
                     read_only=read_only,
                 )
             )
-        # Optionally add the /usr/lib/wsl mount if it exists.
-        wsl_path = Path("/usr/lib/wsl")
-        if wsl_path.exists():
+
+        # Check if on windows
+        if platform.system() == "Windows":
+            logger.info("Adding /usr/lib/wsl mount")
             mounts.append(
                 Mount(
                     target="/usr/lib/wsl",
-                    source=str(wsl_path),
+                    source="/usr/lib/wsl",
                     type="bind",
                     read_only=True,
                 )

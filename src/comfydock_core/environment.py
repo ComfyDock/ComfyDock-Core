@@ -256,14 +256,18 @@ class EnvironmentManager:
 
         env.container_name = self._generate_container_name()
         logger.info("Creating container with name: %s", env.container_name)
-        container = self.docker_iface.create_container(
-            image=env.image,
-            name=env.container_name,
-            command=command,
-            device_requests=device_requests,
-            ports={str(port): port},
-            mounts=mounts,
-        )
+        try:
+            container = self.docker_iface.create_container(
+                image=env.image,
+                name=env.container_name,
+                command=command,
+                device_requests=device_requests,
+                ports={str(port): port},
+                mounts=mounts,
+            )
+        except Exception as e:
+            logger.error("Error creating container: %s", e)
+            raise RuntimeError(f"Error creating container: {e}")
 
         env.id = container.id
         env.status = "created"
