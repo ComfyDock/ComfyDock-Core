@@ -150,6 +150,16 @@ class DockerInterface:
             raise DockerInterfaceImageNotFoundError(f"Image {image} not found.")
         except APIError as e:
             raise DockerInterfaceError(str(e))
+        
+    def get_all_images(self):
+        """
+        Get all images, excluding dangling images.
+        """
+        try:
+            # Filter out dangling images (those with <none>:<none> tag)
+            return self.client.images.list(filters={"dangling": False})
+        except APIError as e:
+            raise DockerInterfaceError(str(e))
 
     def start_container(self, container):
         """

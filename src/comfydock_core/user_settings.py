@@ -26,6 +26,7 @@ class UserSettings(BaseModel):
     command: str = ""
     folders: List[Folder] = []
     max_deleted_environments: int = 10
+    last_used_image: str = ""
 
 
 class UserSettingsError(Exception):
