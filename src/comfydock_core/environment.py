@@ -78,7 +78,9 @@ class EnvironmentManager:
             async for event in self.docker_iface.event_listener():
                 logger.debug("Docker event: %s", event)
                 if event.get("Type") == "container":
-                    await self.notify_update()
+                    action = event.get("Action")
+                    if action in ["start", "stop", "create", "destroy"]:
+                        await self.notify_update()
         except asyncio.CancelledError:
             logger.info("Docker event monitoring stopped")
         except Exception as e:
@@ -178,11 +180,14 @@ class EnvironmentManager:
 
         if folder_id:
             logger.debug("Filtering environments by folder_id: %s", folder_id)
-            filter_fn = lambda e: (
-                DELETED_FOLDER_ID not in e.folderIds
-                if folder_id == "all"
-                else folder_id in e.folderIds
-            )
+            
+            def filter_fn(e):
+                return (
+                    DELETED_FOLDER_ID not in e.folderIds
+                    if folder_id == "all"
+                    else folder_id in e.folderIds
+                )
+                
             filtered_envs = [env for env in environments if filter_fn(env)]
             logger.debug(
                 "Returning %d environments after filtering", len(filtered_envs)
@@ -256,14 +261,18 @@ class EnvironmentManager:
 
         env.container_name = self._generate_container_name()
         logger.info("Creating container with name: %s", env.container_name)
-        container = self.docker_iface.create_container(
-            image=env.image,
-            name=env.container_name,
-            command=command,
-            device_requests=device_requests,
-            ports={str(port): port},
-            mounts=mounts,
-        )
+        try:
+            container = self.docker_iface.create_container(
+                image=env.image,
+                name=env.container_name,
+                command=command,
+                device_requests=device_requests,
+                ports={str(port): port},
+                mounts=mounts,
+            )
+        except Exception as e:
+            logger.error("Error creating container: %s", e)
+            raise RuntimeError(f"Error creating container: {e}")
 
         env.id = container.id
         env.status = "created"
@@ -305,18 +314,20 @@ class EnvironmentManager:
             "Creating container for duplicated environment with name: %s",
             new_env.container_name,
         )
-        self.docker_iface.create_container(
-            image=unique_image,
-            name=new_env.container_name,
-            command=command,
-            device_requests=device_requests,
-            ports={str(port): port},
-            mounts=mounts,
-        )
+        try:
+            container = self.docker_iface.create_container(
+                image=unique_image,
+                name=new_env.container_name,
+                command=command,
+                device_requests=device_requests,
+                ports={str(port): port},
+                mounts=mounts,
+            )
+        except Exception as e:
+            logger.error("Error creating container: %s", e)
+            raise RuntimeError(f"Error creating container: {e}")
 
-        new_env.id = (
-            new_env.container_name
-        )  # Assuming container.id is set correctly in create_container
+        new_env.id = container.id
         new_env.image = unique_image
         new_env.status = "created"
         new_env.duplicate = True
@@ -441,7 +452,7 @@ class EnvironmentManager:
         if env.duplicate:
             try:
                 logger.debug("Removing duplicate image for environment %s", env.id)
-                self.docker_iface.remove_image(env.image, force=True)
+                self.docker_iface.remove_image(env.image)
                 logger.info("Duplicate image %s removed", env.image)
             except Exception as e:
                 logger.warning("Failed to remove duplicate image %s: %s", env.image, e)

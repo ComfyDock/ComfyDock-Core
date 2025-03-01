@@ -10,8 +10,6 @@ from src.comfydock_core.comfyui_integration import (
     try_install_comfyui,
     ComfyUIError,
     COMFYUI_DIRECTORY_NAME,
-    COMFYUI_DEFAULT_BRANCH,
-    COMFYUI_REPO_URL,
 )
 
 # --- Tests for is_comfyui_repo ---

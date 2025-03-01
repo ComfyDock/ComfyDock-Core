@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+import platform
 import posixpath
 import tarfile
 import docker
@@ -147,6 +148,16 @@ class DockerInterface:
             return self.client.images.get(image)
         except NotFound:
             raise DockerInterfaceImageNotFoundError(f"Image {image} not found.")
+        except APIError as e:
+            raise DockerInterfaceError(str(e))
+        
+    def get_all_images(self):
+        """
+        Get all images, excluding dangling images.
+        """
+        try:
+            # Filter out dangling images (those with <none>:<none> tag)
+            return self.client.images.list(filters={"dangling": False})
         except APIError as e:
             raise DockerInterfaceError(str(e))
 
@@ -526,13 +537,14 @@ class DockerInterface:
                     read_only=read_only,
                 )
             )
-        # Optionally add the /usr/lib/wsl mount if it exists.
-        wsl_path = Path("/usr/lib/wsl")
-        if wsl_path.exists():
+
+        # Check if on windows
+        if platform.system() == "Windows":
+            logger.info("Adding /usr/lib/wsl mount")
             mounts.append(
                 Mount(
                     target="/usr/lib/wsl",
-                    source=str(wsl_path),
+                    source="/usr/lib/wsl",
                     type="bind",
                     read_only=True,
                 )

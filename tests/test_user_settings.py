@@ -1,7 +1,5 @@
 # test_user_settings.py
 
-import json
-from pathlib import Path
 import pytest
 from src.comfydock_core.user_settings import UserSettingsManager, UserSettings, UserSettingsError, Folder
 
