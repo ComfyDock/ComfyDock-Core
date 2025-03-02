@@ -226,13 +226,14 @@ class DockerInterface:
         ports: dict,
         detach: bool = True,
         remove: bool = True,
+        environment: dict = None,
     ):
         """
         Run a container from the given image with specified parameters.
         """
         try:
             container = self.client.containers.run(
-                image, name=name, ports=ports, detach=detach, remove=remove
+                image, name=name, ports=ports, detach=detach, remove=remove, environment=environment
             )
             return container
         except APIError as e:
