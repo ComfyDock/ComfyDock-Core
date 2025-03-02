@@ -83,7 +83,7 @@ class DummyContainersManager:
         if container_id == "not_found":
             raise docker.errors.NotFound("Container not found")
         return DummyContainer(container_id)
-    def run(self, image, name, ports, detach=True, remove=True):
+    def run(self, image, name, ports, detach=True, remove=True, environment=None):
         return DummyContainer(name, status="running")
 
 class DummyImagesManager:
