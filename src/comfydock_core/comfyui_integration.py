@@ -23,28 +23,38 @@ def is_comfyui_repo(path: str) -> bool:
     """
     Check if the provided path points to a directory that appears
     to be a valid ComfyUI repository.
-
-    A valid repository must be a directory and contain required files and subdirectories.
+    
+    Uses multiple methods to verify, starting with Git config
+    and falling back to essential core files.
     """
     repo_path = Path(path)
-
+    
     # Ensure the path is a directory
     if not repo_path.is_dir():
+        logger.warning("ComfyUI path is not a directory: %s.", path)
         return False
-
-    # Required files and directories for a valid ComfyUI installation.
-    required_files = ["main.py"]
-    required_dirs = ["models", "comfy", "comfy_execution", "web"]
-
-    for file_name in required_files:
-        if not (repo_path / file_name).is_file():
-            return False
-
-    for dir_name in required_dirs:
-        if not (repo_path / dir_name).is_dir():
-            return False
-
-    return True
+    
+    # Method 1: Check if it's a git repo with ComfyUI remote
+    git_config_path = repo_path / ".git" / "config"
+    if git_config_path.is_file():
+        try:
+            with open(git_config_path, "r") as f:
+                config_content = f.read()
+                if "comfyanonymous/ComfyUI" in config_content:
+                    logger.info("Found ComfyUI remote in git config: %s", git_config_path)
+                    return True
+        except (IOError, UnicodeDecodeError):
+            logger.warning("Failed to read git config: %s", git_config_path)
+            pass  # Fall back to other methods if git config check fails
+    
+    # Method 2: Check for core directories
+    core_dirs = ["comfy", "models"]
+    if all((repo_path / dir_name).is_dir() for dir_name in core_dirs):
+        logger.info("Found core directories: %s", core_dirs)
+        return True
+    
+    logger.warning("No valid ComfyUI installation found at %s", repo_path)
+    return False
 
 
 def check_comfyui_path(path: str) -> Path:
