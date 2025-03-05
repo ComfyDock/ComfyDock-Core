@@ -25,22 +25,12 @@ def test_is_comfyui_repo_valid(tmp_path):
         (repo / d).mkdir()
     assert is_comfyui_repo(str(repo)) is True
 
-def test_is_comfyui_repo_invalid_missing_file(tmp_path):
+def test_is_comfyui_repo_invalid_missing_comfy_core_dir_and_git_config(tmp_path):
     # Create a repo structure missing main.py.
     repo = tmp_path / "invalid_repo"
     repo.mkdir()
-    for d in ["models", "comfy", "comfy_execution", "web"]:
+    for d in ["models"]:
         (repo / d).mkdir()
-    assert is_comfyui_repo(str(repo)) is False
-
-def test_is_comfyui_repo_invalid_missing_dir(tmp_path):
-    # Create a repo structure with main.py but missing one required directory.
-    repo = tmp_path / "invalid_repo"
-    repo.mkdir()
-    (repo / "main.py").write_text("print('hello')")
-    for d in ["models", "comfy", "comfy_execution"]:
-        (repo / d).mkdir()
-    # "web" is missing.
     assert is_comfyui_repo(str(repo)) is False
 
 # --- Tests for check_comfyui_path ---
