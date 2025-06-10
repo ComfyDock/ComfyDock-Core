@@ -6,7 +6,7 @@ import platform
 import posixpath
 import tarfile
 import docker
-from docker.types import Mount
+from docker.types import Mount, DeviceRequest
 from docker.errors import APIError, NotFound
 import tempfile
 import re
@@ -83,12 +83,15 @@ class DockerInterface:
     def create_container(
         self,
         image: str,
-        name: str,
-        command: str,
-        runtime=None,
-        device_requests=None,
-        ports: dict = None,
-        mounts=None,
+        name: str | None = None,
+        command: str | list[str] | None = None,
+        entrypoint: str | list[str] | None = None,
+        runtime: str | None = None,
+        device_requests: list[DeviceRequest] | None = None,
+        ports: dict[str, int | list[int] | tuple[str, int] | None] | None = None,
+        mounts: list[Mount] | None = None,
+        environment: dict[str, str] | list[str] | None = None,
+        **kwargs,
     ):
         """
         Create a new container.
@@ -98,10 +101,13 @@ class DockerInterface:
                 image=image,
                 name=name,
                 command=command,
+                entrypoint=entrypoint,
                 runtime=runtime,
                 device_requests=device_requests,
                 ports=ports,
                 mounts=mounts,
+                environment=environment,
+                **kwargs,
             )
             return container
         except APIError as e:
