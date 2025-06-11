@@ -1,7 +1,7 @@
 # test_user_settings.py
 
 import pytest
-from src.comfydock_core.user_settings import UserSettingsManager, UserSettings, UserSettingsError, Folder
+from src.comfydock_core.user_settings import UserSettingsManager, UserSettings, UserSettingsError, UserSettingsNotFoundError, Folder
 
 # To run: uv run pytest .\tests\test_user_settings.py
 
@@ -11,8 +11,6 @@ from comfydock_core import user_settings
 # Use a fixture to override the file paths in user_settings with temporary ones.
 @pytest.fixture
 def temp_settings_dir(tmp_path):
-
-
     # Save original global values.
     original_settings_file = user_settings.USER_SETTINGS_FILE
     original_lock_file = user_settings.USER_SETTINGS_LOCK_FILE
@@ -44,21 +42,16 @@ def settings_manager(tmp_path):
         default_comfyui_path="/default/path"
     )
 
-def test_load_default_settings(settings_manager):
-    """Test loading default settings when no file exists"""
-    settings = settings_manager.load()
-    assert settings.comfyui_path == "/default/path"
-    assert settings.port == 8188
-    assert settings.runtime == "nvidia"
-    assert settings.command == ""
-    assert settings.folders == []
-    assert settings.max_deleted_environments == 10
+def test_load_nonexistent_settings(settings_manager):
+    """Test that loading settings when no file exists raises UserSettingsNotFoundError"""
+    with pytest.raises(UserSettingsNotFoundError):
+        settings_manager.load()
 
 def test_save_and_load_settings(settings_manager):
     """Test saving settings and loading them back"""
     settings = UserSettings(
         comfyui_path="/my/path",
-        port=8000,
+        port="8000",
         runtime="cpu",
         command="run",
         folders=[Folder(id="folder1", name="Folder One")],
@@ -78,9 +71,20 @@ def test_save_and_load_settings(settings_manager):
 
 def test_update_settings(settings_manager):
     """Test updating settings with partial values"""
+    # First create initial settings
+    initial_settings = UserSettings(
+        comfyui_path="/initial/path",
+        port="8188",
+        runtime="nvidia",
+        command="",
+        folders=[],
+        max_deleted_environments=10
+    )
+    settings_manager.save(initial_settings)
+
     new_values = {
         "comfyui_path": "/updated/path",
-        "port": 9000,
+        "port": "9000",
         "runtime": "cpu",
         "command": "start",
         "max_deleted_environments": 7
@@ -88,7 +92,7 @@ def test_update_settings(settings_manager):
     updated_settings = settings_manager.update(new_values)
     
     assert updated_settings.comfyui_path == "/updated/path"
-    assert updated_settings.port == 9000
+    assert updated_settings.port == "9000"
     assert updated_settings.runtime == "cpu"
     assert updated_settings.command == "start"
     assert updated_settings.max_deleted_environments == 7
@@ -104,6 +108,17 @@ def test_corrupt_settings_file(settings_manager):
 
 def test_create_folder(settings_manager):
     """Test creating a new folder"""
+    # First create initial settings
+    initial_settings = UserSettings(
+        comfyui_path="/path",
+        port="8188",
+        runtime="nvidia",
+        command="",
+        folders=[],
+        max_deleted_environments=10
+    )
+    settings_manager.save(initial_settings)
+    
     settings = settings_manager.load()
     updated_settings = settings_manager.create_folder(settings, "New Folder")
     
@@ -113,6 +128,17 @@ def test_create_folder(settings_manager):
 
 def test_create_duplicate_folder(settings_manager):
     """Test creating a folder with duplicate name"""
+    # First create initial settings
+    initial_settings = UserSettings(
+        comfyui_path="/path",
+        port="8188",
+        runtime="nvidia",
+        command="",
+        folders=[],
+        max_deleted_environments=10
+    )
+    settings_manager.save(initial_settings)
+    
     settings = settings_manager.load()
     settings_manager.create_folder(settings, "Test Folder")
     
@@ -121,6 +147,17 @@ def test_create_duplicate_folder(settings_manager):
 
 def test_update_folder(settings_manager):
     """Test updating a folder name"""
+    # First create initial settings
+    initial_settings = UserSettings(
+        comfyui_path="/path",
+        port="8188",
+        runtime="nvidia",
+        command="",
+        folders=[],
+        max_deleted_environments=10
+    )
+    settings_manager.save(initial_settings)
+    
     settings = settings_manager.load()
     settings = settings_manager.create_folder(settings, "Old Name")
     folder_id = settings.folders[0].id
@@ -130,6 +167,17 @@ def test_update_folder(settings_manager):
 
 def test_delete_folder(settings_manager):
     """Test deleting a folder"""
+    # First create initial settings
+    initial_settings = UserSettings(
+        comfyui_path="/path",
+        port="8188",
+        runtime="nvidia",
+        command="",
+        folders=[],
+        max_deleted_environments=10
+    )
+    settings_manager.save(initial_settings)
+    
     settings = settings_manager.load()
     settings = settings_manager.create_folder(settings, "Test Folder")
     folder_id = settings.folders[0].id
@@ -141,6 +189,17 @@ def test_delete_folder(settings_manager):
 
 def test_delete_nonexistent_folder(settings_manager):
     """Test deleting a folder that doesn't exist"""
+    # First create initial settings
+    initial_settings = UserSettings(
+        comfyui_path="/path",
+        port="8188",
+        runtime="nvidia",
+        command="",
+        folders=[],
+        max_deleted_environments=10
+    )
+    settings_manager.save(initial_settings)
+    
     settings = settings_manager.load()
     envs = []
     with pytest.raises(ValueError, match="Folder not found"):
