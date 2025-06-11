@@ -154,7 +154,7 @@ class EnvironmentManager:
         port = str(env.options.get("port", COMFYUI_PORT)) # Convert to string to avoid type error
         parsed_ports = parse_ports(port)
         
-        command = env.command #self._build_command(port, env.command)
+        command = env.command if env.command != "" else None
 
         runtime = env.options.get("runtime", "")
         device_requests = self._get_device_requests(runtime)
@@ -164,6 +164,7 @@ class EnvironmentManager:
 
         # Convert entrypoint to list[str]
         entrypoint = env.options.get("entrypoint", None)
+        entrypoint = entrypoint if entrypoint != "" else None
 
         return _ContainerConfig(mounts, parsed_ports, command, device_requests, environment_variables, entrypoint)
     
@@ -257,6 +258,7 @@ class EnvironmentManager:
         Common logic for any path that ends with 'docker_iface.create_container'.
         """
         cfg = self._create_container_config(env)
+        print(f"cfg: {cfg}")
         env.container_name = self._generate_container_name()
         try:
             container = self.docker_iface.create_container(

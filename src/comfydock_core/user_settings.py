@@ -4,8 +4,8 @@ import json
 import uuid
 from pathlib import Path
 from filelock import FileLock, Timeout
-from pydantic import BaseModel, ValidationError
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, ValidationError
+from typing import Optional, List, Dict, Any, Union
 
 from comfydock_core.environment import Environment
 
@@ -17,21 +17,28 @@ logger = logging.getLogger(__name__)
 class Folder(BaseModel):
     id: str
     name: str
+    icon: Optional[str] = None
 
 
 class UserSettings(BaseModel):
-    comfyui_path: str
-    port: int = 8188
-    runtime: str = "nvidia"
-    command: str = ""
-    folders: List[Folder] = []
-    max_deleted_environments: int = 10
-    last_used_image: str = ""
-
+    comfyui_path: Optional[str] = ""
+    port: Optional[str] = "8188"
+    runtime: Optional[str] = ""
+    command: Optional[str] = ""
+    folders: List[Folder] = Field(default_factory=list)
+    max_deleted_environments: int = Field(default=10, ge=1, le=100)
+    last_used_image: Optional[str] = ""
+    environment_variables: Optional[str] = ""
+    entrypoint: Optional[str] = ""
+    url: Optional[str] = "http://localhost:8188"
+    allow_multiple: bool = Field(default=False)
 
 class UserSettingsError(Exception):
     """Custom exception type for user settings errors."""
+    pass
 
+class UserSettingsNotFoundError(Exception):
+    """Custom exception type for user settings not found errors."""
     pass
 
 
@@ -50,6 +57,39 @@ class UserSettingsManager:
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"UserSettingsManager initialized with settings file: {self.settings_file}")
 
+    def _translate_old_format(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        print(f"Translating old format settings: {data}")
+        """
+        Translate old format settings to new format.
+        Handles conversion of:
+        - port from int to string
+        - runtime from required to optional
+        - command from required to optional
+        - last_used_image from required to optional
+        """
+        translated = data.copy()
+        
+        # Convert port from int to string if needed
+        if "port" in translated and isinstance(translated["port"], int):
+            translated["port"] = str(translated["port"])
+        
+        # Ensure optional fields exist
+        for field in ["runtime", "command", "last_used_image"]:
+            if field not in translated:
+                translated[field] = ""
+        
+        # Ensure folders is a list
+        if "folders" not in translated:
+            translated["folders"] = []
+        
+        # Ensure max_deleted_environments is within bounds
+        if "max_deleted_environments" in translated:
+            max_deleted = translated["max_deleted_environments"]
+            if not isinstance(max_deleted, int) or max_deleted < 1 or max_deleted > 100:
+                translated["max_deleted_environments"] = 10
+        
+        return translated
+
     def _acquire_lock(self) -> FileLock:
         """Create and acquire a file lock with configured timeout."""
         return FileLock(self.lock_file, timeout=self.lock_timeout)
@@ -67,22 +107,28 @@ class UserSettingsManager:
                         with open(self.settings_file, "r") as f:
                             logger.info("Loading settings from %s", self.settings_file)
                             data = json.load(f)
-                            return UserSettings(**data)
+                            # Translate old format to new format
+                            translated_data = self._translate_old_format(data)
+                            print(f"Translated data: {translated_data}")
+                            return UserSettings(**translated_data)
                     else:
                         logger.error("Settings path exists but is not a file: %s", self.settings_file)
                         raise UserSettingsError(f"Settings path exists but is not a file: {self.settings_file}")
                 else:
-                    logger.warning("Settings file does not exist, creating default settings")
-                    return UserSettings(comfyui_path=self.default_comfyui_path)
+                    # logger.warning("Settings file does not exist, creating default settings")
+                    # return UserSettings(comfyui_path=self.default_comfyui_path)
+                    print("Settings file does not exist")
+                    logger.error("Settings file does not exist")
+                    raise UserSettingsNotFoundError(f"Settings file does not exist")
         except Timeout:
             logger.error("Could not acquire file lock to load settings")
             raise UserSettingsError("Could not acquire file lock to load settings")
         except (ValidationError, json.JSONDecodeError) as e:
             logger.error("Invalid settings format: %s", e)
             raise UserSettingsError(f"Invalid settings format: {str(e)}")
-        except Exception as e:
-            logger.error("Error loading settings: %s", e)
-            raise UserSettingsError(f"Error loading settings: {str(e)}")
+        # except Exception as e:
+        #     logger.error("Error loading settings: %s", e)
+        #     raise UserSettingsError(f"Error loading settings: {str(e)}")
 
     def save(self, settings: UserSettings) -> None:
         """Save user settings to the configured file."""
