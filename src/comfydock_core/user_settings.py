@@ -58,7 +58,6 @@ class UserSettingsManager:
         self.logger.info(f"UserSettingsManager initialized with settings file: {self.settings_file}")
 
     def _translate_old_format(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        print(f"Translating old format settings: {data}")
         """
         Translate old format settings to new format.
         Handles conversion of:
@@ -109,15 +108,11 @@ class UserSettingsManager:
                             data = json.load(f)
                             # Translate old format to new format
                             translated_data = self._translate_old_format(data)
-                            print(f"Translated data: {translated_data}")
                             return UserSettings(**translated_data)
                     else:
                         logger.error("Settings path exists but is not a file: %s", self.settings_file)
                         raise UserSettingsError(f"Settings path exists but is not a file: {self.settings_file}")
                 else:
-                    # logger.warning("Settings file does not exist, creating default settings")
-                    # return UserSettings(comfyui_path=self.default_comfyui_path)
-                    print("Settings file does not exist")
                     logger.error("Settings file does not exist")
                     raise UserSettingsNotFoundError(f"Settings file does not exist")
         except Timeout:

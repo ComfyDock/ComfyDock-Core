@@ -258,7 +258,7 @@ class EnvironmentManager:
         Common logic for any path that ends with 'docker_iface.create_container'.
         """
         cfg = self._create_container_config(env)
-        print(f"cfg: {cfg}")
+        
         env.container_name = self._generate_container_name()
         try:
             container = self.docker_iface.create_container(

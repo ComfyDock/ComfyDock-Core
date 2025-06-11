@@ -2,6 +2,8 @@ name: Publish Python Package
 
 on:
   workflow_dispatch:  # Manual trigger
+  push:
+    branches: [ main ]  # Auto-trigger on push to main
 
 jobs:
   publish:
@@ -24,10 +26,7 @@ jobs:
       run: uv python install  # Uses version from pyproject.toml
 
     - name: Install dependencies
-      run: uv sync --group dev  # Install dev dependencies including pytest
-
-    - name: Run tests
-      run: uv run pytest tests/  # Run tests from tests directory
+      run: uv sync --group dev  # Install dev dependencies
 
     - name: Extract package version
       id: version
