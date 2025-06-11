@@ -34,7 +34,7 @@ class FakeDockerInterface:
         self.containers = {}
         self.next_id = 1
 
-    def create_container(self, image, name, command, device_requests=None, ports=None, mounts=None, runtime=None):
+    def create_container(self, image, name, command, device_requests=None, ports=None, mounts=None, runtime=None, entrypoint=None, environment=None):
         container_id = f"container_{self.next_id}"
         self.next_id += 1
         container = FakeContainer(container_id, status="created")

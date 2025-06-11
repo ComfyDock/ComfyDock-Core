@@ -5,15 +5,16 @@ import time
 from pathlib import Path
 from typing import Optional, List
 from pydantic import BaseModel
-from docker.types import DeviceRequest
+from docker.types import DeviceRequest, Mount
 from .docker_interface import DockerInterface, DockerInterfaceContainerNotFoundError
 from .persistence import (
     save_environments as persistence_save_environments,
     load_environments as persistence_load_environments,
     PersistenceError,
 )
+from dataclasses import dataclass
 
-from .utils import generate_id
+from .utils import generate_id, parse_ports, ParsedPorts, parse_environment_variables
 import logging
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,16 @@ class Environment(BaseModel):
 class EnvironmentUpdate(BaseModel):
     name: Optional[str] = None
     folderIds: Optional[List[str]] = None
+    
+
+@dataclass
+class _ContainerConfig:
+    mounts: list[Mount]
+    ports: ParsedPorts
+    command: list[str] | str | None
+    device_requests: list[DeviceRequest] | None
+    environment: list[str] | None
+    entrypoint: list[str] | str | None
 
 
 class EnvironmentManager:
@@ -56,35 +67,10 @@ class EnvironmentManager:
             self.db_file,
             self.lock_file,
         )
-
-    def set_ws_manager(self, manager):
-        self.ws_manager = manager
-
-    async def notify_update(self):
-        if self.ws_manager:
-            logger.info("Notifying WebSocket manager")
-            # environments = self.load_environments()
-            await self.ws_manager.broadcast(
-                {
-                    "type": "environments_update",
-                    # "data": [env.model_dump() for env in environments]
-                }
-            )
-
-    async def monitor_docker_events(self):
-        """Non-blocking Docker event monitoring"""
-        logger.info("Starting Docker event monitoring")
-        try:
-            async for event in self.docker_iface.event_listener():
-                logger.debug("Docker event: %s", event)
-                if event.get("Type") == "container":
-                    action = event.get("Action")
-                    if action in ["start", "stop", "create", "destroy"]:
-                        await self.notify_update()
-        except asyncio.CancelledError:
-            logger.info("Docker event monitoring stopped")
-        except Exception as e:
-            logger.error("Error in Docker event monitoring: %s", e)
+            
+    # ────────────────────────────────────
+    # private helpers
+    # ────────────────────────────────────
 
     def _validate_environments_list(self, environments: List[Environment]) -> None:
         logger.debug(
@@ -140,6 +126,208 @@ class EnvironmentManager:
         logger.error("Environment with id %s not found", env_id)
         raise ValueError(f"Environment {env_id} not found")
 
+    def _generate_container_name(self) -> str:
+        container_name = f"comfy-env-{generate_id()}"
+        logger.debug("Generated container name: %s", container_name)
+        return container_name
+
+    def _build_command(self, port: int, base_command: str) -> str:
+        command = f"--port {port} {base_command}".strip()
+        logger.debug("Built command: %s", command)
+        return command
+
+    def _get_device_requests(self, runtime: str) -> Optional[List[DeviceRequest]]:
+        device_requests = (
+            [DeviceRequest(count=-1, capabilities=[["gpu"]])]
+            if runtime == "nvidia"
+            else None
+        )
+        logger.debug("Device requests for runtime '%s': %s", runtime, device_requests)
+        return device_requests
+
+    def _create_container_config(self, env: Environment) -> _ContainerConfig:
+        logger.debug("Creating container configuration for environment id: %s", env.id)
+        comfyui_path = Path(env.comfyui_path)
+        mount_config = env.options.get("mount_config", {})
+        mounts = self.docker_iface.create_mounts(mount_config, comfyui_path)
+
+        port = str(env.options.get("port", COMFYUI_PORT)) # Convert to string to avoid type error
+        parsed_ports = parse_ports(port)
+        
+        command = env.command if env.command != "" else None
+
+        runtime = env.options.get("runtime", "")
+        device_requests = self._get_device_requests(runtime)
+        
+        # Convert environment_variables to list[str]
+        environment_variables = parse_environment_variables(env.options.get("environment_variables", None))
+
+        # Convert entrypoint to list[str]
+        entrypoint = env.options.get("entrypoint", None)
+        entrypoint = entrypoint if entrypoint != "" else None
+
+        return _ContainerConfig(mounts, parsed_ports, command, device_requests, environment_variables, entrypoint)
+    
+    def _stop_other_environments(
+        self, current_env_id: str, environments: List[Environment]
+    ) -> None:
+        logger.info(
+            "Stopping other running environments excluding id: %s", current_env_id
+        )
+        for env in environments:
+            if env.id != current_env_id and env.status == "running":
+                logger.debug("Stopping environment with id: %s", env.id)
+                try:
+                    container = self.docker_iface.get_container(env.id)
+                    self.docker_iface.stop_container(container)
+                    logger.info("Stopped environment with id: %s", env.id)
+                except DockerInterfaceContainerNotFoundError:
+                    logger.warning(
+                        "Container for environment %s not found during stop operation",
+                        env.id,
+                    )
+                    continue
+                
+    def _hard_delete_environment(
+        self, env: Environment, environments: List[Environment]
+    ) -> None:
+        logger.info("Hard deleting environment with id: %s", env.id)
+        try:
+            container = self.docker_iface.get_container(env.id)
+            logger.debug(
+                "Stopping container for environment %s with timeout %s",
+                env.id,
+                SIGNAL_TIMEOUT,
+            )
+            self.docker_iface.stop_container(container, timeout=SIGNAL_TIMEOUT)
+            logger.debug("Removing container for environment %s", env.id)
+            self.docker_iface.remove_container(container)
+            logger.info("Container for environment %s removed", env.id)
+        except DockerInterfaceContainerNotFoundError:
+            logger.warning(
+                "Container for environment %s not found during hard delete", env.id
+            )
+
+        if env.duplicate:
+            try:
+                logger.debug("Removing duplicate image for environment %s", env.id)
+                self.docker_iface.remove_image(env.image)
+                logger.info("Duplicate image %s removed", env.image)
+            except Exception as e:
+                logger.warning("Failed to remove duplicate image %s: %s", env.image, e)
+
+        self._remove_environment(env, environments)
+        logger.info("Environment %s removed from environment list", env.id)
+
+    def _prune_deleted_environments(
+        self, environments: List[Environment], max_deleted: int
+    ) -> None:
+        deleted_envs = [
+            env for env in environments if DELETED_FOLDER_ID in env.folderIds
+        ]
+        logger.info(
+            "Pruning deleted environments: found %d, max allowed %d",
+            len(deleted_envs),
+            max_deleted,
+        )
+        if len(deleted_envs) <= max_deleted:
+            logger.debug("No pruning needed, count is within limit")
+            return
+
+        deleted_envs.sort(key=lambda e: e.metadata.get("deleted_at", 0))
+        num_to_prune = len(deleted_envs) - max_deleted
+        logger.info("Pruning %d environments", num_to_prune)
+        for env in deleted_envs[:num_to_prune]:
+            logger.debug("Hard deleting environment during prune: %s", env.id)
+            self._hard_delete_environment(env, environments)
+            
+    def _save_environment(self, env: Environment) -> None:
+        environments = self.load_environments()
+        environments.append(env)
+        self._save_environments(environments)
+        
+    def _provision_container(
+        self,
+        env: Environment,
+        *,
+        base_image: str,
+        duplicate: bool = False,
+        original: Environment | None = None,
+    ) -> Environment:
+        """
+        Common logic for any path that ends with 'docker_iface.create_container'.
+        """
+        cfg = self._create_container_config(env)
+        print(f"cfg: {cfg}")
+        env.container_name = self._generate_container_name()
+        try:
+            container = self.docker_iface.create_container(
+                image=base_image,
+                name=env.container_name,
+                command=cfg.command,
+                device_requests=cfg.device_requests,
+                ports=cfg.ports,
+                mounts=cfg.mounts,
+                environment=cfg.environment,
+                entrypoint=cfg.entrypoint,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Error creating container: {exc}") from exc
+
+        env.id = container.id
+        env.image = base_image
+        env.status = "created"
+        env.duplicate = duplicate
+        env.metadata = (
+            {**original.metadata, "created_at": time.time()}
+            if duplicate and original
+            else {"base_image": base_image, "created_at": time.time()}
+        )
+
+        self._save_environment(env)          # tiny helper, appends + saves
+        return env
+    
+    def _ensure_local_image(self, image: str) -> None:
+        """
+        Ensure that the image exists locally.
+        """
+        img = self.docker_iface.get_image(image)
+        if img is None:
+            raise RuntimeError(f"Image {image} not found locally")
+    
+    # ────────────────────────────────────
+    # public methods
+    # ────────────────────────────────────
+    
+    def set_ws_manager(self, manager):
+        self.ws_manager = manager
+
+    async def notify_update(self):
+        if self.ws_manager:
+            logger.info("Notifying WebSocket manager")
+            # environments = self.load_environments()
+            await self.ws_manager.broadcast(
+                {
+                    "type": "environments_update",
+                    # "data": [env.model_dump() for env in environments]
+                }
+            )
+
+    async def monitor_docker_events(self):
+        """Non-blocking Docker event monitoring"""
+        logger.info("Starting Docker event monitoring")
+        try:
+            async for event in self.docker_iface.event_listener():
+                logger.debug("Docker event: %s", event)
+                if event.get("Type") == "container":
+                    action = event.get("Action")
+                    if action in ["start", "stop", "create", "destroy"]:
+                        await self.notify_update()
+        except asyncio.CancelledError:
+            logger.info("Docker event monitoring stopped")
+        except Exception as e:
+            logger.error("Error in Docker event monitoring: %s", e)
+    
     def get_environment(self, env_id: str) -> Environment:
         logger.info("Getting environment with id: %s", env_id)
         environments = self.load_environments()
@@ -203,140 +391,24 @@ class EnvironmentManager:
         if len(env.name) > 128:
             logger.error("Environment name exceeds 128 characters: %s", env.name)
             raise ValueError("Environment name exceeds 128 characters")
-
-    def _generate_container_name(self) -> str:
-        container_name = f"comfy-env-{generate_id()}"
-        logger.debug("Generated container name: %s", container_name)
-        return container_name
-
-    def _build_command(self, port: int, base_command: str) -> str:
-        command = f"--port {port} {base_command}".strip()
-        logger.debug("Built command: %s", command)
-        return command
-
-    def _get_device_requests(self, runtime: str) -> Optional[List[DeviceRequest]]:
-        device_requests = (
-            [DeviceRequest(count=-1, capabilities=[["gpu"]])]
-            if runtime == "nvidia"
-            else None
-        )
-        logger.debug("Device requests for runtime '%s': %s", runtime, device_requests)
-        return device_requests
-
-    def _create_container_config(self, env: Environment) -> tuple:
-        logger.debug("Creating container configuration for environment id: %s", env.id)
-        comfyui_path = Path(env.comfyui_path)
-        mount_config = env.options.get("mount_config", {})
-        mounts = self.docker_iface.create_mounts(mount_config, comfyui_path)
-
-        port = env.options.get("port", COMFYUI_PORT)
-        command = self._build_command(port, env.command)
-
-        runtime = env.options.get("runtime", "")
-        device_requests = self._get_device_requests(runtime)
-
-        logger.debug(
-            "Container config for environment %s: mounts=%s, port=%s, command='%s', device_requests=%s",
-            env.id,
-            mounts,
-            port,
-            command,
-            device_requests,
-        )
-        return mounts, port, command, device_requests
-
+        
     def create_environment(self, env: Environment) -> Environment:
-        logger.info("Creating new environment: %s", env.name)
-        environments = self.load_environments()
-        self.check_environment_name(env, environments)
-
-        # Check if image exists locally, if not throw an error
-        logger.info("Checking if image exists locally: %s", env.image)
-        img = self.docker_iface.get_image(env.image)
-        if img is None:
-            logger.error("Image %s not found locally", env.image)
-            raise RuntimeError(f"Image {env.image} not found locally")
-
-        mounts, port, command, device_requests = self._create_container_config(env)
-
-        env.container_name = self._generate_container_name()
-        logger.info("Creating container with name: %s", env.container_name)
-        try:
-            container = self.docker_iface.create_container(
-                image=env.image,
-                name=env.container_name,
-                command=command,
-                device_requests=device_requests,
-                ports={str(port): port},
-                mounts=mounts,
-            )
-        except Exception as e:
-            logger.error("Error creating container: %s", e)
-            raise RuntimeError(f"Error creating container: {e}")
-
-        env.id = container.id
-        env.status = "created"
-        env.metadata = {"base_image": env.image, "created_at": time.time()}
-        logger.info("Environment created with container id: %s", env.id)
-
-        environments.append(env)
-        self._save_environments(environments)
-        logger.info("Environment %s saved", env.id)
-        return env
-
+        self._ensure_local_image(env.image)
+        return self._provision_container(env, base_image=env.image)
+    
     def duplicate_environment(self, env_id: str, new_env: Environment) -> Environment:
-        logger.info(
-            "Duplicating environment with original id: %s to new environment: %s",
-            env_id,
-            new_env.name,
-        )
-        environments = self.load_environments()
-        original = self._find_environment(env_id, environments)
-
+        original = self._find_environment(env_id, self.load_environments())
         if original.status == "created":
-            logger.error(
-                "Cannot duplicate environment %s because its status is 'created'",
-                env_id,
-            )
             raise RuntimeError("Environment can only be duplicated after activation")
 
-        mounts, port, command, device_requests = self._create_container_config(new_env)
-        new_env.container_name = self._generate_container_name()
-
-        logger.info("Committing original container with id: %s", env_id)
-        original_container = self.docker_iface.get_container(env_id)
-        unique_image = f"comfy-env-clone:{new_env.container_name}"
+        # 1. commit the original container into a new image
+        unique_image = f"comfy-env-clone:{self._generate_container_name()}"
         self.docker_iface.commit_container(
-            original_container, "comfy-env-clone", new_env.container_name
+            self.docker_iface.get_container(env_id), *unique_image.split(":")
         )
 
-        logger.info(
-            "Creating container for duplicated environment with name: %s",
-            new_env.container_name,
-        )
-        try:
-            container = self.docker_iface.create_container(
-                image=unique_image,
-                name=new_env.container_name,
-                command=command,
-                device_requests=device_requests,
-                ports={str(port): port},
-                mounts=mounts,
-            )
-        except Exception as e:
-            logger.error("Error creating container: %s", e)
-            raise RuntimeError(f"Error creating container: {e}")
-
-        new_env.id = container.id
-        new_env.image = unique_image
-        new_env.status = "created"
-        new_env.duplicate = True
-        new_env.metadata = {**original.metadata, "created_at": time.time()}
-
-        environments.append(new_env)
-        self._save_environments(environments)
-        logger.info("Duplicated environment created with id: %s", new_env.id)
-        return new_env
+        # 2. spin up a container from that image
+        return self._provision_container(new_env, base_image=unique_image, duplicate=True, original=original)
 
     def update_environment(self, env_id: str, update: EnvironmentUpdate) -> Environment:
         logger.info("Updating environment with id: %s", env_id)
@@ -360,26 +432,6 @@ class EnvironmentManager:
         self._save_environments(environments)
         logger.info("Environment %s updated successfully", env_id)
         return env
-
-    def _stop_other_environments(
-        self, current_env_id: str, environments: List[Environment]
-    ) -> None:
-        logger.info(
-            "Stopping other running environments excluding id: %s", current_env_id
-        )
-        for env in environments:
-            if env.id != current_env_id and env.status == "running":
-                logger.debug("Stopping environment with id: %s", env.id)
-                try:
-                    container = self.docker_iface.get_container(env.id)
-                    self.docker_iface.stop_container(container)
-                    logger.info("Stopped environment with id: %s", env.id)
-                except DockerInterfaceContainerNotFoundError:
-                    logger.warning(
-                        "Container for environment %s not found during stop operation",
-                        env.id,
-                    )
-                    continue
 
     def activate_environment(
         self, env_id: str, allow_multiple: bool = False
@@ -428,59 +480,6 @@ class EnvironmentManager:
             self._save_environments(environments)
             logger.info("Environment %s deactivated", env.id)
         return env
-
-    def _hard_delete_environment(
-        self, env: Environment, environments: List[Environment]
-    ) -> None:
-        logger.info("Hard deleting environment with id: %s", env.id)
-        try:
-            container = self.docker_iface.get_container(env.id)
-            logger.debug(
-                "Stopping container for environment %s with timeout %s",
-                env.id,
-                SIGNAL_TIMEOUT,
-            )
-            self.docker_iface.stop_container(container, timeout=SIGNAL_TIMEOUT)
-            logger.debug("Removing container for environment %s", env.id)
-            self.docker_iface.remove_container(container)
-            logger.info("Container for environment %s removed", env.id)
-        except DockerInterfaceContainerNotFoundError:
-            logger.warning(
-                "Container for environment %s not found during hard delete", env.id
-            )
-
-        if env.duplicate:
-            try:
-                logger.debug("Removing duplicate image for environment %s", env.id)
-                self.docker_iface.remove_image(env.image)
-                logger.info("Duplicate image %s removed", env.image)
-            except Exception as e:
-                logger.warning("Failed to remove duplicate image %s: %s", env.image, e)
-
-        self._remove_environment(env, environments)
-        logger.info("Environment %s removed from environment list", env.id)
-
-    def _prune_deleted_environments(
-        self, environments: List[Environment], max_deleted: int
-    ) -> None:
-        deleted_envs = [
-            env for env in environments if DELETED_FOLDER_ID in env.folderIds
-        ]
-        logger.info(
-            "Pruning deleted environments: found %d, max allowed %d",
-            len(deleted_envs),
-            max_deleted,
-        )
-        if len(deleted_envs) <= max_deleted:
-            logger.debug("No pruning needed, count is within limit")
-            return
-
-        deleted_envs.sort(key=lambda e: e.metadata.get("deleted_at", 0))
-        num_to_prune = len(deleted_envs) - max_deleted
-        logger.info("Pruning %d environments", num_to_prune)
-        for env in deleted_envs[:num_to_prune]:
-            logger.debug("Hard deleting environment during prune: %s", env.id)
-            self._hard_delete_environment(env, environments)
 
     def delete_environment(self, env_id: str, max_deleted: int = 10) -> str:
         logger.info("Deleting environment with id: %s", env_id)
