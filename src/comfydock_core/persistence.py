@@ -37,13 +37,17 @@ def load_environments(
                         or if any other error occurs during loading.
     """
     environments = []
+    
     lock = FileLock(lock_file, timeout=10)
     logger.info(f"Loading environments from {db_file}")
     try:
         with lock:
             if Path(db_file).exists():
+                logger.debug(f"Opening file: {db_file}")
                 with open(db_file, "r") as f:
                     environments = json.load(f)
+            else:
+                logger.debug(f"File does not exist: {db_file}")
     except Timeout:
         logger.error("Could not acquire file lock for loading environments.")
         raise PersistenceError("Could not acquire file lock for loading environments.")
@@ -52,6 +56,8 @@ def load_environments(
         raise PersistenceError("Error decoding JSON from environments file.")
     except Exception as e:
         logger.error("An error occurred while loading environments: %s", e)
+        logger.error("Error type: %s", type(e))
+        logger.error("Error args: %s", e.args)
         raise PersistenceError(
             f"An error occurred while loading environments: {str(e)}"
         )

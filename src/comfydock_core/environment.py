@@ -337,7 +337,7 @@ class EnvironmentManager:
         logger.info("Loading environments from file: %s", self.db_file)
         try:
             raw_envs = persistence_load_environments(self.db_file, self.lock_file)
-            logger.debug("Loaded raw environments: %s", raw_envs)
+            # logger.debug("Loaded raw environments: %s", raw_envs)
         except PersistenceError as e:
             logger.error("Error loading environments: %s", e)
             raise RuntimeError(f"Error loading environments: {e}")
